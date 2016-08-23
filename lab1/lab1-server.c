@@ -11,6 +11,8 @@
 #define PORT 4070
 #define SECRET "abc\n"
 #define BUFF_MAX 512
+#define REMBASH "<rembash>\n"
+#define OK "<ok>\n"
 
 void handle_client(int connect_fd);
 
@@ -42,10 +44,9 @@ int main() {
 }
 
 void handle_client(int connect_fd) {
-  const char * const msg_1 = "<rembash>\n";
   char buffer[BUFF_MAX];
   int read_len;
-  if ( write(connect_fd, msg_1, strlen(msg_1)) == -1) {
+  if ( write(connect_fd, REMBASH, strlen(REMBASH)) == -1) {
     perror("Server failed to write\n");
     exit(EXIT_FAILURE);
   };
@@ -56,12 +57,18 @@ void handle_client(int connect_fd) {
   };
 
   if ( read_len != strlen(SECRET) || strncmp(SECRET, buffer, read_len) ) {
-    perror("Incorrect protocol\n");
+    perror("Incorrect secret key protocol\n");
     write(connect_fd, "<error>\n", 8);
     close(connect_fd);
   }
 
+  if ( write(connect_fd, "<ok>\n", 5) == -1) {
+    perror("Failed to write\n");
+    exit(EXIT_FAILURE);
+  }
+
   while ( (read_len = read(connect_fd, buffer, BUFF_MAX)) > 0) {
-    printf("Recd: %s\n", buffer);
+    buffer[read_len] = '\0';
+    printf("Len: %d\nRecd: %s\n", read_len, buffer);
   }
 }
