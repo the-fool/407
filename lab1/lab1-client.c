@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -19,6 +21,8 @@ void run_protocol();
 void safe_write(char const *message);
 void safe_read(char const *expected);
 void main_loop();
+void handle_socket();
+void handle_terminal();
 
 int main(int argc, char **argv)
 {
@@ -56,19 +60,50 @@ void run_protocol()
 
 void main_loop()
 {
-    char buff[BUFF_MAX];
+    int child_pid;
 
-    safe_write("ls\n");
-    read(FD, buff, BUFF_MAX);
-    printf("%s\n", buff);
-    sleep(1);
-    safe_write("touch foo\n");
-
-    read(FD, buff, BUFF_MAX);
-    printf("%s\n", buff);
-    sleep(1);
+    if ( (child_pid = fork()) == -1 )
+    {
+        perror("Unable to fork()\n");
+        exit(EXIT_FAILURE);
+    }
+    else if ( child_pid == 0 )
+    {
+        dup2(FD, STDOUT_FILENO);
+        close(FD);
+        handle_terminal();
+    }
+    else
+    {
+        dup2(FD, STDIN_FILENO);
+        close(FD);
+        handle_socket();
+    }
 }
 
+void handle_socket()
+{
+  char* buff = (char*) malloc(BUFF_MAX);
+  size_t n = BUFF_MAX;
+  int line_sz;
+  while(1) {
+    line_sz = getline(&buff, &n, stdin);
+    printf("the size: %d\nthe line: %s\n", line_sz, buff);
+  }
+
+}
+
+void handle_terminal()
+{
+  char* buff = (char*) malloc(BUFF_MAX);
+  size_t n = BUFF_MAX;
+  int line_sz;
+  while(1) {
+    line_sz = getline(&buff, &n, stdin);
+    printf("the size: %d\nthe line: %s\n", line_sz, buff);
+  }
+
+}
 void safe_write(char const *message)
 {
     if ( write(FD, message, strlen(message)) == -1 )
