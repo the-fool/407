@@ -21,8 +21,8 @@ void run_protocol();
 void safe_write(char const *message);
 void safe_read(char const *expected);
 void main_loop();
-void handle_socket();
-void handle_terminal();
+void read_socket();
+void read_terminal();
 
 int main(int argc, char **argv)
 {
@@ -71,17 +71,17 @@ void main_loop()
     {
         dup2(FD, STDOUT_FILENO);
         close(FD);
-        handle_terminal();
+        read_terminal();
     }
     else
     {
         dup2(FD, STDIN_FILENO);
         close(FD);
-        handle_socket();
+        read_socket();
     }
 }
 
-void handle_socket()
+void read_socket()
 {
   char* buff = (char*) malloc(BUFF_MAX);
   size_t n = BUFF_MAX;
@@ -93,7 +93,7 @@ void handle_socket()
 
 }
 
-void handle_terminal()
+void read_terminal()
 {
   char* buff = (char*) malloc(BUFF_MAX);
   size_t n = BUFF_MAX;

