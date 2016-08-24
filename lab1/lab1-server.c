@@ -43,6 +43,8 @@ int main() {
     socklen_t client_len = sizeof client_address;
     client_socket_fd = accept(server_socket_fd, (struct sockaddr*) &client_address, &client_len);
     if (run_protocol(client_socket_fd) == 0) {
+
+      // Protocol success
       if ((fork_status = fork()) == -1) {
         perror("Fork failed\n");
         exit(EXIT_FAILURE);
@@ -50,6 +52,8 @@ int main() {
         handle_client(client_socket_fd);
       }
     }
+    // Close parent-process copy of file descriptor
+    close(client_socket_fd);
   }
 }
 
@@ -64,9 +68,7 @@ int run_protocol(int fd) {
   if (safe_write(fd, REMBASH) ||
       safe_read(fd, SECRET) ||
       safe_write(fd, OK)
-    ) {
-      return 1;
-    }
+    ) { return 1; }
   else return 0;
 }
 
@@ -89,6 +91,7 @@ int safe_read(const int fd, char const* expected) {
 
   if ( ((unsigned int)read_len != strlen(expected)) || strncmp(expected, buff, read_len)) {
     perror("Client gave incorrect protocol\n");
+    safe_write(fd, "<error>\n");
     return 1;
   }
   return 0;
