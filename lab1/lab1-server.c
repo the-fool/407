@@ -14,13 +14,15 @@
 #define REMBASH "<rembash>\n"
 #define OK "<ok>\n"
 
-void run_protocol(int connect_fd);
-void safe_write(const int fd, char const* msg);
-void safe_read(const int fd, char const* expected);
-void handle_client(int connect_fd);
+int run_protocol(int connect_fd);
+int safe_write(const int fd, char const* msg);
+int safe_read(const int fd, char const* expected);
+int handle_client(int connect_fd);
 
 int main() {
-  int server_socket_fd, client_socket_fd;
+  int server_socket_fd;
+  int client_socket_fd;
+  int fork_status;
   struct sockaddr_in server_address, client_address;
 
   server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -40,48 +42,59 @@ int main() {
     printf("Server is waiting\n");
     socklen_t client_len = sizeof client_address;
     client_socket_fd = accept(server_socket_fd, (struct sockaddr*) &client_address, &client_len);
-    if (fork() == 0) {
-      handle_client(client_socket_fd);
+    if (run_protocol(client_socket_fd) == 0) {
+      if ((fork_status = fork()) == -1) {
+        perror("Fork failed\n");
+        exit(EXIT_FAILURE);
+      } else if (fork_status == 0) {
+        handle_client(client_socket_fd);
+      }
     }
   }
 }
 
-void handle_client(int fd) {
+int handle_client(int fd) {
   char buffer[BUFF_MAX];
   int read_len;
 
-  run_protocol(fd);
 
   while ( (read_len = read(fd, buffer, BUFF_MAX)) > 0) {
     buffer[read_len] = '\0';
     printf("Recd: %s\n", buffer);
   }
+  return 0;
 }
 
-void run_protocol(int fd) {
-  safe_write(fd, REMBASH);
-  safe_read(fd, SECRET);
-  safe_write(fd, OK);
+int run_protocol(int fd) {
+  if (safe_write(fd, REMBASH) ||
+      safe_read(fd, SECRET) ||
+      safe_write(fd, OK)
+    ) {
+      return 1;
+    }
+  else return 0;
 }
 
-void safe_write(const int fd, char const* message) {
+int safe_write(const int fd, char const* message) {
   if ( write(fd, message, strlen(message)) == -1 ) {
     perror("Failed to write\n");
-    exit(EXIT_FAILURE);
+    return 1;
   }
+  return 0;
 }
 
-void safe_read(const int fd, char const* expected) {
+int safe_read(const int fd, char const* expected) {
   char buff[BUFF_MAX];
-  int read_len;
+  unsigned int read_len;
 
   if ( (read_len = read(fd, buff, BUFF_MAX)) <= 0) {
     perror("Error reading from client\n");
-    exit(EXIT_FAILURE);
+    return 1;
   }
 
-  if ( read_len != strlen(expected) || strncmp(expected, buff, read_len)) {
+  if ( (read_len != strlen(expected)) || strncmp(expected, buff, read_len)) {
     perror("Client gave incorrect protocol\n");
-    exit(EXIT_FAILURE);
+    return 1;
   }
+  return 0;
 }
