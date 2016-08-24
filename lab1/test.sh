@@ -1,25 +1,25 @@
 #!/bin/bash
 set -e
 
-make debug
+make debug || (cowsay "build FAIL!" && exit 1)
 
 ./server &
 
 ps -p $! -o pid= &> /dev/null
 if [ $? -ne 0 ]
 then
-    echo "Server failed to start!"
+    cowsay "Server FAILED to start!"
     exit 1
 fi
 
 ./client
 if [ $? -ne 0 ]
 then
-    echo "Client failed"
+    cowsay "Client FAILED!"
     exit 1
 fi
 
 killall server # For some reason, `kill %1` won't work?!
 
-echo "smoke test passed. that deserves a smoke"
+cowsay "smoke test PASSED. that deserves a smoke"
 exit 0

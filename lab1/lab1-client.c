@@ -54,7 +54,8 @@ void run_protocol () {
 void main_loop() {
   safe_write("HELLO!\n");
   sleep(1);
-  safe_write("HOW DO YOU DO\n");
+  safe_write("Is it me you're looking for?\n");
+  sleep(1);
 }
 
 void safe_write(char const* message) {
