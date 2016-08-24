@@ -52,9 +52,15 @@ void run_protocol () {
 }
 
 void main_loop() {
-  safe_write("HELLO!\n");
+  char buff[BUFF_MAX];
+  safe_write("ls\n");
+  read(FD, buff, BUFF_MAX);
+  printf("%s\n", buff);
   sleep(1);
-  safe_write("Is it me you're looking for?\n");
+  safe_write("touch foo\n");
+
+  read(FD, buff, BUFF_MAX);
+  printf("%s\n", buff);
   sleep(1);
 }
 
@@ -74,7 +80,7 @@ void safe_read(char const* expected) {
     exit(EXIT_FAILURE);
   }
 
-  if ( read_len != strlen(expected) || strncmp(expected, buff, read_len)) {
+  if ( (unsigned int)read_len != strlen(expected) || strncmp(expected, buff, read_len)) {
     perror("Server gave incorrect protocol\n");
     exit(EXIT_FAILURE);
   }

