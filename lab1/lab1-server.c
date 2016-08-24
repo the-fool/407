@@ -25,7 +25,8 @@ int main()
     int server_socket_fd;
     int client_socket_fd;
     int fork_status;
-    struct sockaddr_in server_address, client_address;
+    struct sockaddr_in server_address;
+    struct sockaddr_in client_address;
 
     server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
 
