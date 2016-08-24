@@ -13,6 +13,7 @@
 #define BUFF_MAX 512
 #define REMBASH "<rembash>\n"
 #define OK "<ok>\n"
+#define ERROR "<error>\n"
 
 int run_protocol(int connect_fd);
 int safe_write(const int fd, char const* msg);
@@ -91,7 +92,7 @@ int safe_read(const int fd, char const* expected) {
 
   if ( ((unsigned int)read_len != strlen(expected)) || strncmp(expected, buff, read_len)) {
     perror("Client gave incorrect protocol\n");
-    safe_write(fd, "<error>\n");
+    safe_write(fd, ERROR);
     return 1;
   }
   return 0;
