@@ -14,6 +14,9 @@
 #define REMBASH "<rembash>\n"
 #define OK "<ok>\n"
 
+void run_protocol(int connect_fd);
+void safe_write(const int fd, char const* msg);
+void safe_read(const int fd, char const* expected);
 void handle_client(int connect_fd);
 
 int main() {
@@ -34,7 +37,7 @@ int main() {
   // Ignore exited children
   signal(SIGCHLD, SIG_IGN);
   while(1) {
-    printf("Server waiting\n");
+    printf("Server is waiting\n");
     socklen_t client_len = sizeof client_address;
     client_socket_fd = accept(server_socket_fd, (struct sockaddr*) &client_address, &client_len);
     if (fork() == 0) {
@@ -43,32 +46,42 @@ int main() {
   }
 }
 
-void handle_client(int connect_fd) {
+void handle_client(int fd) {
   char buffer[BUFF_MAX];
   int read_len;
-  if ( write(connect_fd, REMBASH, strlen(REMBASH)) == -1) {
-    perror("Server failed to write\n");
-    exit(EXIT_FAILURE);
-  };
 
-  if ( (read_len = read(connect_fd, buffer, BUFF_MAX)) <= 0 ) {
-    perror("Server received nothing from client\n");
-    exit(EXIT_FAILURE);
-  };
+  run_protocol(fd);
 
-  if ( read_len != strlen(SECRET) || strncmp(SECRET, buffer, read_len) ) {
-    perror("Incorrect secret key protocol\n");
-    write(connect_fd, "<error>\n", 8);
-    close(connect_fd);
+  while ( (read_len = read(fd, buffer, BUFF_MAX)) > 0) {
+    buffer[read_len] = '\0';
+    printf("Recd: %s\n", buffer);
   }
+}
 
-  if ( write(connect_fd, "<ok>\n", 5) == -1) {
+void run_protocol(int fd) {
+  safe_write(fd, REMBASH);
+  safe_read(fd, SECRET);
+  safe_write(fd, OK);
+}
+
+void safe_write(const int fd, char const* message) {
+  if ( write(fd, message, strlen(message)) == -1 ) {
     perror("Failed to write\n");
     exit(EXIT_FAILURE);
   }
+}
 
-  while ( (read_len = read(connect_fd, buffer, BUFF_MAX)) > 0) {
-    buffer[read_len] = '\0';
-    printf("Len: %d\nRecd: %s\n", read_len, buffer);
+void safe_read(const int fd, char const* expected) {
+  char buff[BUFF_MAX];
+  int read_len;
+
+  if ( (read_len = read(fd, buff, BUFF_MAX)) <= 0) {
+    perror("Error reading from client\n");
+    exit(EXIT_FAILURE);
+  }
+
+  if ( read_len != strlen(expected) || strncmp(expected, buff, read_len)) {
+    perror("Client gave incorrect protocol\n");
+    exit(EXIT_FAILURE);
   }
 }

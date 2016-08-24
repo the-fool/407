@@ -16,8 +16,8 @@
 int FD;
 
 void run_protocol();
-void safe_write(const char* message);
-void safe_read(const char* expected);
+void safe_write(char const* message);
+void safe_read(char const* expected);
 void main_loop();
 
 int main(int argc, char** argv) {
@@ -56,14 +56,14 @@ void main_loop() {
   safe_write("HOW DO YOU DO\n");
 }
 
-void safe_write(const char* message) {
+void safe_write(char const* message) {
   if ( write(FD, message, strlen(message)) == -1 ) {
     perror("Failed to write\n");
     exit(EXIT_FAILURE);
   }
 }
 
-void safe_read(const char* expected) {
+void safe_read(char const* expected) {
   char buff[BUFF_MAX];
   int read_len;
 
