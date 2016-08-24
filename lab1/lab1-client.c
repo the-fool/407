@@ -23,12 +23,13 @@ void main_loop();
 int main(int argc, char** argv) {
   struct sockaddr_in socket_address;
 
-  FD = socket(AF_INET, SOCK_STREAM, 0);
-  socket_address.sin_family = AF_INET;
   #ifdef DEBUG
   argv[1] = "127.0.0.1";
   #endif
+
+  FD = socket(AF_INET, SOCK_STREAM, 0);
   inet_aton(argv[1], &socket_address.sin_addr);
+  socket_address.sin_family = AF_INET;
   socket_address.sin_port = htons(PORT);
 
   if ( connect(FD, (struct sockaddr *)&socket_address, sizeof socket_address) == -1 ) {
@@ -52,7 +53,7 @@ void run_protocol () {
 
 void main_loop() {
   safe_write("HELLO!\n");
-  sleep(3);
+  sleep(1);
   safe_write("HOW DO YOU DO\n");
 }
 
