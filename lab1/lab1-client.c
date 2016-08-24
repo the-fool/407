@@ -7,81 +7,91 @@
 #include <stdio.h>
 #include <string.h>
 
-#define PORT 4070
-#define SECRET "abc\n"
+#define PORT     4070
+#define SECRET   "abc\n"
 #define BUFF_MAX 512
-#define REMBASH "<rembash>\n"
-#define OK "<ok>\n"
+#define REMBASH  "<rembash>\n"
+#define OK       "<ok>\n"
 
 int FD;
 
 void run_protocol();
-void safe_write(char const* message);
-void safe_read(char const* expected);
+void safe_write(char const *message);
+void safe_read(char const *expected);
 void main_loop();
 
-int main(int argc, char** argv) {
-  struct sockaddr_in socket_address;
+int main(int argc, char **argv)
+{
+    struct sockaddr_in socket_address;
 
   #ifdef DEBUG
-  argv[1] = "127.0.0.1";
+    argv[1] = "127.0.0.1";
   #endif
 
-  FD = socket(AF_INET, SOCK_STREAM, 0);
-  inet_aton(argv[1], &socket_address.sin_addr);
-  socket_address.sin_family = AF_INET;
-  socket_address.sin_port = htons(PORT);
+    FD = socket(AF_INET, SOCK_STREAM, 0);
+    inet_aton(argv[1], &socket_address.sin_addr);
+    socket_address.sin_family = AF_INET;
+    socket_address.sin_port = htons(PORT);
 
-  if ( connect(FD, (struct sockaddr *)&socket_address, sizeof socket_address) == -1 ) {
-    perror("Unable to connect");
-    exit(EXIT_FAILURE);
-  }
+    if ( connect(FD, (struct sockaddr *) &socket_address, sizeof socket_address) == -1 )
+    {
+        perror("Unable to connect");
+        exit(EXIT_FAILURE);
+    }
 
-  run_protocol();
+    run_protocol();
 
-  close(FD);
-  exit(EXIT_SUCCESS);
+    close(FD);
+    exit(EXIT_SUCCESS);
 }
 
-void run_protocol () {
-  safe_read(REMBASH);
-  safe_write(SECRET);
-  safe_read(OK);
+void run_protocol()
+{
+    safe_read(REMBASH);
+    safe_write(SECRET);
+    safe_read(OK);
 
-  main_loop();
+    main_loop();
 }
 
-void main_loop() {
-  char buff[BUFF_MAX];
-  safe_write("ls\n");
-  read(FD, buff, BUFF_MAX);
-  printf("%s\n", buff);
-  sleep(1);
-  safe_write("touch foo\n");
+void main_loop()
+{
+    char buff[BUFF_MAX];
 
-  read(FD, buff, BUFF_MAX);
-  printf("%s\n", buff);
-  sleep(1);
+    safe_write("ls\n");
+    read(FD, buff, BUFF_MAX);
+    printf("%s\n", buff);
+    sleep(1);
+    safe_write("touch foo\n");
+
+    read(FD, buff, BUFF_MAX);
+    printf("%s\n", buff);
+    sleep(1);
 }
 
-void safe_write(char const* message) {
-  if ( write(FD, message, strlen(message)) == -1 ) {
-    perror("Failed to write\n");
-    exit(EXIT_FAILURE);
-  }
+void safe_write(char const *message)
+{
+    if ( write(FD, message, strlen(message)) == -1 )
+    {
+        perror("Failed to write\n");
+        exit(EXIT_FAILURE);
+    }
 }
 
-void safe_read(char const* expected) {
-  char buff[BUFF_MAX];
-  int read_len;
+void safe_read(char const *expected)
+{
+    char buff[BUFF_MAX];
+    int read_len;
 
-  if ( (read_len = read(FD, buff, BUFF_MAX)) <= 0) {
-    perror("Error reading from server\n");
-    exit(EXIT_FAILURE);
-  }
+    if ( (read_len = read(FD, buff, BUFF_MAX)) <= 0)
+    {
+        perror("Error reading from server\n");
+        exit(EXIT_FAILURE);
+    }
 
-  if ( (unsigned int)read_len != strlen(expected) || strncmp(expected, buff, read_len)) {
-    perror("Server gave incorrect protocol\n");
-    exit(EXIT_FAILURE);
-  }
+    if ( (unsigned int) read_len != strlen(expected) || strncmp(expected, buff, read_len))
+    {
+        perror("Server gave incorrect protocol\n");
+        exit(EXIT_FAILURE);
+    }
 }
