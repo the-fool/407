@@ -69,8 +69,8 @@ void main_loop()
     }
     else if ( child_pid == 0 )
     {
-        dup2(FD, STDOUT_FILENO);
-        close(FD);
+        // dup2(FD, STDOUT_FILENO);
+        // close(FD);
         read_terminal();
     }
     else
@@ -83,27 +83,28 @@ void main_loop()
 
 void read_socket()
 {
-  char* buff = (char*) malloc(BUFF_MAX);
-  size_t n = BUFF_MAX;
-  int line_sz;
-  while(1) {
-    line_sz = getline(&buff, &n, stdin);
-    printf("the size: %d\nthe line: %s\n", line_sz, buff);
-  }
+    char *buff = (char *) malloc(BUFF_MAX);
+    size_t n = BUFF_MAX;
 
+    while (getline(&buff, &n, stdin) > 0)
+    {
+        printf("Echoed from server: %s\n", buff);
+    }
 }
 
 void read_terminal()
 {
-  char* buff = (char*) malloc(BUFF_MAX);
-  size_t n = BUFF_MAX;
-  int line_sz;
-  while(1) {
-    line_sz = getline(&buff, &n, stdin);
-    printf("the size: %d\nthe line: %s\n", line_sz, buff);
-  }
+    char *buff = (char *) malloc(BUFF_MAX);
+    size_t n = BUFF_MAX;
+    int line_sz;
 
+    while (1)
+    {
+        line_sz = getline(&buff, &n, stdin);
+        write(FD, buff, line_sz);
+    }
 }
+
 void safe_write(char const *message)
 {
     if ( write(FD, message, strlen(message)) == -1 )

@@ -22,6 +22,7 @@ int safe_write(const int fd, char const *msg);
 int safe_read(const int fd, char const *expected);
 void handle_client(int connect_fd);
 void debug(int fd);
+
 int main()
 {
     int server_socket_fd;
@@ -83,13 +84,15 @@ void debug(int fd)
     size_t len = 512;
     dup2(fd, STDIN_FILENO);
     printf("// Debug\n");
-    while ((len = read(STDIN_FILENO, buff, 512)) > 0)
+    while ((len = read(fd, buff, 512)) > 0)
     {
       buff[len] = '\0';
       printf("Got: %s\n", buff);
+      write(fd, buff, len + 1);
     }
     printf("// End debug\n");
 }
+
 void handle_client(int fd)
 {
     dup2(fd, STDOUT_FILENO);
