@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define PORT     4070
 #define SECRET   "abc\n"
@@ -28,6 +30,7 @@ void read_terminal();
 int main(int argc, char **argv)
 {
     struct sockaddr_in socket_address;
+
     setbuf(stdout, NULL);
   #ifdef DEBUG
     argv[1] = "127.0.0.1";
@@ -43,11 +46,21 @@ int main(int argc, char **argv)
         perror("Unable to connect");
         exit(EXIT_FAILURE);
     }
+
+  #ifdef DEBUG
     printf("Connected\n");
+  #endif
+
     run_protocol();
+
+  #ifdef DEBUG
     printf("protocol success\n");
+  #endif
+
     main_loop();
+
     close(FD);
+
     exit(EXIT_SUCCESS);
 }
 
@@ -76,7 +89,13 @@ void main_loop()
         dup2(FD, STDIN_FILENO);
         close(FD);
         read_socket();
+        int status;
+        wait(&status);
+        #ifdef DEBUG
+        printf("Collectd child: %d\n", status);
+        #endif
     }
+    exit(EXIT_SUCCESS);
 }
 
 void read_socket()
@@ -84,9 +103,9 @@ void read_socket()
     char *buff = (char *) malloc(BUFF_MAX);
     size_t n = BUFF_MAX;
     ssize_t sz;
+
     while ((sz = read(STDIN_FILENO, buff, n)) > 0)
     {
-        //buff[line_size - 1] = '\0'; // remove newline
         write(STDOUT_FILENO, buff, sz);
     }
 }
@@ -101,6 +120,10 @@ void read_terminal()
     {
         line_size = getline(&buff, &n, stdin);
         write(FD, buff, line_size);
+        if (strncmp(buff, "exit\n", line_size) == 0)
+        {
+            break;
+        }
     }
 }
 
