@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <signal.h>
 #include <unistd.h>
@@ -54,7 +55,7 @@ int main()
                 (struct sockaddr *) &client_address,
                 &client_len
                 );
-
+        printf("got client\n");
         if (run_protocol(client_socket_fd) == 0)
         {
 
@@ -98,7 +99,7 @@ void handle_client(int fd)
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDIN_FILENO);
     dup2(fd, STDERR_FILENO);
-
+    close(fd);
     execlp("bash", "bash", "--noediting", "-i", NULL);
 }
 

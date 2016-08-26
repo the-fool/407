@@ -42,9 +42,10 @@ int main(int argc, char **argv)
         perror("Unable to connect");
         exit(EXIT_FAILURE);
     }
-
+    printf("Connected\n");
     run_protocol();
-
+    printf("protocol success\n");
+    main_loop();
     close(FD);
     exit(EXIT_SUCCESS);
 }
@@ -54,8 +55,6 @@ void run_protocol()
     safe_read(REMBASH);
     safe_write(SECRET);
     safe_read(OK);
-
-    main_loop();
 }
 
 void main_loop()
@@ -69,8 +68,6 @@ void main_loop()
     }
     else if ( child_pid == 0 )
     {
-        // dup2(FD, STDOUT_FILENO);
-        // close(FD);
         read_terminal();
     }
     else
@@ -88,7 +85,7 @@ void read_socket()
 
     while (getline(&buff, &n, stdin) > 0)
     {
-        printf("Echoed from server: %s\n", buff);
+        printf("%s", buff);
     }
 }
 
