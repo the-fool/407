@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#define _BSD_SOURCE
 
 #include <sys/types.h>
 #include <sys/socket.h>
