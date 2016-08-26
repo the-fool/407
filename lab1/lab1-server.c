@@ -32,13 +32,19 @@ int main()
     struct sockaddr_in server_address;
     struct sockaddr_in client_address;
 
-    server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if ( (server_socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+      perror("Socket creation failed");
+      exit(EXIT_FAILURE);
+    }
 
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);
     server_address.sin_port = htons(PORT);
 
-    bind(server_socket_fd, (struct sockaddr *) &server_address, sizeof server_address);
+    if( bind(server_socket_fd, (struct sockaddr *) &server_address, sizeof server_address) == -1) {
+      perror("Bind failed");
+      exit(EXIT_FAILURE);
+    }
 
     // create queue
     listen(server_socket_fd, 5);
