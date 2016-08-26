@@ -27,7 +27,7 @@ void read_terminal();
 int main(int argc, char **argv)
 {
     struct sockaddr_in socket_address;
-
+    setbuf(stdout, NULL);
   #ifdef DEBUG
     argv[1] = "127.0.0.1";
   #endif
@@ -82,10 +82,11 @@ void read_socket()
 {
     char *buff = (char *) malloc(BUFF_MAX);
     size_t n = BUFF_MAX;
-
-    while (getline(&buff, &n, stdin) > 0)
+    ssize_t sz;
+    while ((sz = read(STDIN_FILENO, buff, n)) > 0)
     {
-        printf("%s", buff);
+        //buff[line_size - 1] = '\0'; // remove newline
+        write(STDOUT_FILENO, buff, sz);
     }
 }
 
@@ -93,12 +94,12 @@ void read_terminal()
 {
     char *buff = (char *) malloc(BUFF_MAX);
     size_t n = BUFF_MAX;
-    int line_sz;
+    ssize_t line_size;
 
     while (1)
     {
-        line_sz = getline(&buff, &n, stdin);
-        write(FD, buff, line_sz);
+        line_size = getline(&buff, &n, stdin);
+        write(FD, buff, line_size);
     }
 }
 
