@@ -47,10 +47,14 @@ int main()
     }
 
     // create queue
-    listen(server_socket_fd, 5);
+    if (listen(server_socket_fd, 5) == -1) {
+      perror("Listen failed\n");
+      exit(EXIT_FAILURE);
+    }
 
     // Ignore exited children
     signal(SIGCHLD, SIG_IGN);
+
     while (1)
     {
         printf("Server is waiting\n");
@@ -61,6 +65,11 @@ int main()
                 (struct sockaddr *) &client_address,
                 &client_len
                 );
+        if (client_socket_fd == -1) {
+          perror("Socket accept failed\n");
+          exit(EXIT_FAILURE);
+        }
+
         printf("got client\n");
         if (run_protocol(client_socket_fd) == 0)
         {
@@ -78,6 +87,8 @@ int main()
               #endif
                 handle_client(client_socket_fd);
             }
+        }  else {
+          fprintf(stderr, "Client failed rembash protocol handshake\n");
         }
 
         // Close parent-process copy of file descriptor
