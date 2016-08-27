@@ -30,20 +30,31 @@ void read_terminal();
 int main(int argc, char **argv)
 {
     struct sockaddr_in socket_address;
+    char error_string[128];
+    char *host = argv[1];
 
+    if (argc < 2)
+    {
+        perror("Usage: client HOST_IP");
+        exit(EXIT_FAILURE);
+    }
+    // remove line buffering
     setbuf(stdout, NULL);
-  #ifdef DEBUG
-    argv[1] = "127.0.0.1";
-  #endif
 
     FD = socket(AF_INET, SOCK_STREAM, 0);
+    if (FD == -1)
+    {
+        perror("Unable to create socket\n");
+        exit(EXIT_FAILURE);
+    }
     inet_aton(argv[1], &socket_address.sin_addr);
     socket_address.sin_family = AF_INET;
     socket_address.sin_port = htons(PORT);
 
-    if ( connect(FD, (struct sockaddr *) &socket_address, sizeof socket_address) == -1 )
+    if (connect(FD, (struct sockaddr *) &socket_address, sizeof socket_address) == -1)
     {
-        perror("Unable to connect");
+        sprintf(error_string, "Unable to connect to %s:%d", host, PORT);
+        perror(error_string);
         exit(EXIT_FAILURE);
     }
 
@@ -116,20 +127,16 @@ void read_terminal()
     size_t n = BUFF_MAX;
     ssize_t line_size;
 
-    while (1)
+    while ((line_size = getline(&buff, &n, stdin)) > 0 && strncmp(buff, "exit\n", line_size) != 0)
     {
-        line_size = getline(&buff, &n, stdin);
-        write(FD, buff, line_size);
-        if (strncmp(buff, "exit\n", line_size) == 0)
-        {
-            break;
-        }
+        safe_write(buff);
     }
+    safe_write("exit\n");
 }
 
 void safe_write(char const *message)
 {
-    if ( write(FD, message, strlen(message)) == -1 )
+    if (write(FD, message, strlen(message)) == -1)
     {
         perror("Failed to write\n");
         exit(EXIT_FAILURE);
@@ -141,13 +148,13 @@ void safe_read(char const *expected)
     char buff[BUFF_MAX];
     int read_len;
 
-    if ( (read_len = read(FD, buff, BUFF_MAX)) <= 0)
+    if ((read_len = read(FD, buff, BUFF_MAX)) <= 0)
     {
         perror("Error reading from server\n");
         exit(EXIT_FAILURE);
     }
 
-    if ( (unsigned int) read_len != strlen(expected) || strncmp(expected, buff, read_len))
+    if ((unsigned int) read_len != strlen(expected) || strncmp(expected, buff, read_len))
     {
         perror("Server gave incorrect protocol\n");
         exit(EXIT_FAILURE);
