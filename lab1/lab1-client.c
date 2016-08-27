@@ -86,7 +86,7 @@ void main_loop()
 {
     int child_pid;
 
-    if ( (child_pid = fork()) == -1 )
+    if ((child_pid = fork()) == -1)
     {
         perror("Unable to fork()\n");
         exit(EXIT_FAILURE);
@@ -100,8 +100,23 @@ void main_loop()
         dup2(FD, STDIN_FILENO);
         close(FD);
         read_socket();
+
+        int wait_res;
         int status;
-        wait(&status);
+        if ((wait_res = waitpid(child_pid, &status, WNOHANG)) == -1)
+        {
+            perror("Wait failed\n");
+            exit(EXIT_FAILURE);
+        }
+        else if (wait_res == 0)
+        {
+            kill(child_pid, 9);
+            wait(&status);
+        }
+        else
+        {
+            // noop
+        }
         #ifdef DEBUG
         printf("Collectd child: %d\n", status);
         #endif
