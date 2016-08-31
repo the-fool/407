@@ -136,9 +136,9 @@ int fork_and_handle_io()
             kill(child_pid, 9);
             wait(&status);
         }
-        #ifdef DEBUG
+      #ifdef DEBUG
         printf("Collectd child: %d\n", status);
-        #endif
+      #endif
         return err_status;
     }
 }
@@ -176,7 +176,6 @@ int read_terminal_write_socket()
         {
             return 1; // On error, return
         }
-        ;
     }
     if (safe_write("exit\n") != 0)
     {
