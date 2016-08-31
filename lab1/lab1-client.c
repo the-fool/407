@@ -20,34 +20,56 @@
 
 int FD;
 
-void run_protocol();
-void safe_write(char const *message);
-void safe_read(char const *expected);
-void main_loop();
-void read_socket();
-void read_terminal();
+int safe_write(char const *message);
+int safe_read(char const *expected);
+int connect_to_server(char *host);
+int run_protocol();
+int read_socket_write_terminal();
+int read_terminal_write_socket();
+int fork_and_handle_io();
 
 int main(int argc, char **argv)
 {
-    struct sockaddr_in socket_address;
-    char error_string[128];
-    char *host = argv[1];
-
+    int error_status;
     if (argc < 2)
     {
         perror("Usage: client HOST_IP");
         exit(EXIT_FAILURE);
     }
+
     // remove line buffering
     setbuf(stdout, NULL);
+
+    if (connect_to_server(argv[1]) != 0)
+    {
+        exit(EXIT_FAILURE);
+    }
+
+    if (run_protocol() != 0)
+    {
+        perror("Protocol failed. Exiting.");
+        exit(EXIT_FAILURE);
+    }
+
+    error_status = fork_and_handle_io();
+
+    close(FD);
+
+    exit(error_status);
+}
+
+int connect_to_server(char *host)
+{
+    struct sockaddr_in socket_address;
+    char error_string[128];
 
     FD = socket(AF_INET, SOCK_STREAM, 0);
     if (FD == -1)
     {
         perror("Unable to create socket\n");
-        exit(EXIT_FAILURE);
+        return 1;
     }
-    inet_aton(argv[1], &socket_address.sin_addr);
+    inet_aton(host, &socket_address.sin_addr);
     socket_address.sin_family = AF_INET;
     socket_address.sin_port = htons(PORT);
 
@@ -55,76 +77,73 @@ int main(int argc, char **argv)
     {
         sprintf(error_string, "Unable to connect to %s:%d", host, PORT);
         perror(error_string);
-        exit(EXIT_FAILURE);
+        return 1;
     }
-
   #ifdef DEBUG
     printf("Connected\n");
   #endif
+    return 0;
+}
 
-    run_protocol();
+int run_protocol()
+{
+    if (safe_read(REMBASH) ||
+        safe_write(SECRET) ||
+        safe_read(OK))
+    {
+        return 1;
+    }
 
   #ifdef DEBUG
     printf("protocol success\n");
   #endif
-
-    main_loop();
-
-    close(FD);
-
-    exit(EXIT_SUCCESS);
+    return 0;
 }
 
-void run_protocol()
-{
-    safe_read(REMBASH);
-    safe_write(SECRET);
-    safe_read(OK);
-}
-
-void main_loop()
+int fork_and_handle_io()
 {
     int child_pid;
 
     if ((child_pid = fork()) == -1)
     {
-        perror("Unable to fork()\n");
-        exit(EXIT_FAILURE);
+        perror("Unable to fork()");
+        return 1;
     }
-    else if ( child_pid == 0 )
+    else if (child_pid == 0)
     {
-        read_terminal();
+        return read_terminal_write_socket();
     }
     else
     {
+        int err_status;
         dup2(FD, STDIN_FILENO);
         close(FD);
-        read_socket();
+        // Stash error status to use for later --
+        //   If there was an IO failure, we still ought to
+        //   collect the child process before returning error status
+        err_status = read_socket_write_terminal();
 
         int wait_res;
         int status;
         if ((wait_res = waitpid(child_pid, &status, WNOHANG)) == -1)
         {
-            perror("Wait failed\n");
-            exit(EXIT_FAILURE);
+            perror("Wait failed");
+            return 1;
         }
+        // If the child has not exited, kill it!
         else if (wait_res == 0)
         {
             kill(child_pid, 9);
             wait(&status);
         }
-        else
-        {
-            // noop
-        }
         #ifdef DEBUG
         printf("Collectd child: %d\n", status);
         #endif
+        return err_status;
     }
-    exit(EXIT_SUCCESS);
 }
 
-void read_socket()
+int read_socket_write_terminal()
 {
     char *buff = (char *) malloc(BUFF_MAX);
     size_t n = BUFF_MAX;
@@ -132,11 +151,20 @@ void read_socket()
 
     while ((sz = read(STDIN_FILENO, buff, n)) > 0)
     {
-        write(STDOUT_FILENO, buff, sz);
+        if (write(STDOUT_FILENO, buff, sz) == -1)
+        {
+            perror("Failed writing to stdout");
+            return 1;
+        }
     }
+    if (sz == -1)
+    {
+        return 1;
+    }
+    return 0;
 }
 
-void read_terminal()
+int read_terminal_write_socket()
 {
     char *buff = (char *) malloc(BUFF_MAX);
     size_t n = BUFF_MAX;
@@ -144,21 +172,30 @@ void read_terminal()
 
     while ((line_size = getline(&buff, &n, stdin)) > 0 && strncmp(buff, "exit\n", line_size) != 0)
     {
-        safe_write(buff);
+        if (safe_write(buff) != 0)
+        {
+            return 1; // On error, return
+        }
+        ;
     }
-    safe_write("exit\n");
+    if (safe_write("exit\n") != 0)
+    {
+        return 1;
+    }
+    return 0;
 }
 
-void safe_write(char const *message)
+int safe_write(char const *message)
 {
     if (write(FD, message, strlen(message)) == -1)
     {
         perror("Failed to write\n");
-        exit(EXIT_FAILURE);
+        return 1;
     }
+    return 0;
 }
 
-void safe_read(char const *expected)
+int safe_read(char const *expected)
 {
     char buff[BUFF_MAX];
     int read_len;
@@ -166,12 +203,13 @@ void safe_read(char const *expected)
     if ((read_len = read(FD, buff, BUFF_MAX)) <= 0)
     {
         perror("Error reading from server\n");
-        exit(EXIT_FAILURE);
+        return 1;
     }
 
     if ((unsigned int) read_len != strlen(expected) || strncmp(expected, buff, read_len))
     {
         perror("Server gave incorrect protocol\n");
-        exit(EXIT_FAILURE);
+        return 1;
     }
+    return 0;
 }

@@ -60,8 +60,9 @@ int main()
 
     while (1)
     {
+      #ifdef DEBUG
         printf("Server is waiting\n");
-
+      #endif
         socklen_t client_len = sizeof client_address;
         client_socket_fd = accept(
                 server_socket_fd,
@@ -73,8 +74,9 @@ int main()
             perror("Socket accept failed\n");
             exit(EXIT_FAILURE);
         }
-
-        printf("got client\n");
+      #ifdef DEBUG
+        printf("Received client\n");
+      #endif
         if (run_protocol(client_socket_fd) == 0)
         {
             // Protocol success
@@ -85,36 +87,19 @@ int main()
             }
             else if (fork_status == 0)
             {
-              #ifdef DEBUG
-                debug(client_socket_fd);
-              #endif
                 handle_client(client_socket_fd);
             }
         }
         else
         {
+          #ifdef DEBUG
             fprintf(stderr, "Client failed rembash protocol handshake\n");
+          #endif
         }
 
         // Close parent-process copy of file descriptor
         close(client_socket_fd);
     }
-}
-
-void debug(int fd)
-{
-    char *buff = (char *) malloc(512);
-    size_t len = 512;
-
-    dup2(fd, STDIN_FILENO);
-    printf("// Debug\n");
-    while ( (len = read(fd, buff, 512)) > 0 )
-    {
-        buff[len] = '\0';
-        printf("Got: %s\n", buff);
-        write(fd, buff, len + 1);
-    }
-    printf("// End debug\n");
 }
 
 void handle_client(int fd)
@@ -163,7 +148,7 @@ int safe_read(const int fd, char const *expected)
     }
 
     if ((unsigned int) read_len != strlen(expected) ||
-         strncmp(expected, buff, read_len))
+        strncmp(expected, buff, read_len))
     {
         perror("Client gave incorrect protocol\n");
         safe_write(fd, ERROR);
