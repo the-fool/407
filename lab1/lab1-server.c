@@ -104,9 +104,10 @@ int main()
 
 void handle_client(int fd)
 {
-    dup2(fd, STDOUT_FILENO);
-    dup2(fd, STDIN_FILENO);
-    dup2(fd, STDERR_FILENO);
+    if (dup2(fd, STDOUT_FILENO) || dup2(fd, STDIN_FILENO) || dup2(fd, STDERR_FILENO)) {
+      perror("Dup2 failed");
+      exit(EXIT_FAILURE);
+    }
     close(fd);
     setsid();
     execlp("bash", "bash", "--noediting", "-i", NULL);
