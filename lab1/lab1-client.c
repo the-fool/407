@@ -116,8 +116,6 @@ int fork_and_handle_io()
     else
     {
         int err_status;
-        dup2(FD, STDIN_FILENO);
-        close(FD);
         // Stash error status to use for later --
         //   If there was an IO failure, we still ought to
         //   collect the child process before returning error status
@@ -149,7 +147,7 @@ int read_socket_write_terminal()
     size_t n = BUFF_MAX;
     ssize_t sz;
 
-    while ((sz = read(STDIN_FILENO, buff, n)) > 0)
+    while ((sz = read(FD, buff, n)) > 0)
     {
         if (write(STDOUT_FILENO, buff, sz) == -1)
         {
