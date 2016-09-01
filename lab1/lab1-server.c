@@ -104,13 +104,22 @@ int main()
 
 void handle_client(int fd)
 {
-    if (dup2(fd, STDOUT_FILENO) == -1 || dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDERR_FILENO) == -1) {
-      perror("Dup2 failed");
-      exit(EXIT_FAILURE);
+    if (dup2(fd, STDOUT_FILENO) == -1 || dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDERR_FILENO) == -1)
+    {
+        perror("Dup2 failed");
+        exit(EXIT_FAILURE);
     }
-    close(fd);
+    if (close(fd) == -1)
+    {
+        perror("Error closing duplicate file descriptor");
+        exit(EXIT_FAILURE);
+    }
     setsid();
-    execlp("bash", "bash", "--noediting", "-i", NULL);
+    if (execlp("bash", "bash", "--noediting", "-i", NULL) == -1)
+    {
+        perror("Error execing bash");
+        exit(EXIT_FAILURE);
+    }
 }
 
 int run_protocol(int fd)

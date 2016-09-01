@@ -71,7 +71,7 @@ int main(int argc, char **argv)
     }
 
   #ifdef DEBUG
-    printf("Exiting: %d\n", error_status);
+    printf("%d: Exiting: %d\n", getpid(), error_status);
   #endif
     exit(error_status);
 }
@@ -155,11 +155,11 @@ int fork_and_handle_io()
             perror("Kill() failed");
             err_status = 1;
         }
-        if (wait(NULL) == -1)
-        {
-            perror("Wait failed");
-            err_status = 1;
-        }
+        // if (wait(NULL) == -1)
+        // {
+        //     perror("Wait failed");
+        //     err_status = 1;
+        // }
 
       #ifdef DEBUG
         printf("Collectd child\n");
@@ -223,9 +223,8 @@ int read_terminal_write_socket()
 {
     char *buff = (char *) malloc(BUFF_MAX);
     size_t n = BUFF_MAX;
-    ssize_t line_size;
 
-    while ((line_size = getline(&buff, &n, stdin)) > 0 && strncmp(buff, "exit\n", line_size) != 0)
+    while (getline(&buff, &n, stdin) > 0)
     {
         if (safe_write(buff) != 0)
         {
