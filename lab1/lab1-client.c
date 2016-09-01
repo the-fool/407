@@ -184,14 +184,13 @@ void handle_sigchld(int signo, siginfo_t *info, void *context)
         printf("Exiting: %d\n", exit_code);
       #endif
         exit(exit_code);
-
     }
     else
     {
+      // SIGCHLD was raised erroneously
       #ifdef DEBUG
         printf("Recvd SIGCHLD with no child to collect\n");
       #endif
-        // SIGCHLD was raised erroneously
         return;
     }
 }
