@@ -104,7 +104,7 @@ int main()
 
 void handle_client(int fd)
 {
-    if (dup2(fd, STDOUT_FILENO) || dup2(fd, STDIN_FILENO) || dup2(fd, STDERR_FILENO)) {
+    if (dup2(fd, STDOUT_FILENO) == -1 || dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDERR_FILENO) == -1) {
       perror("Dup2 failed");
       exit(EXIT_FAILURE);
     }

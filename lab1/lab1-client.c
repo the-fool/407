@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,7 +19,7 @@
 #define REMBASH  "<rembash>\n"
 #define OK       "<ok>\n"
 
-int FD;
+int FD; // Global socket file-descriptor, for convenience
 
 int safe_write(char const *message);
 int safe_read(char const *expected);
@@ -27,13 +28,15 @@ int run_protocol();
 int read_socket_write_terminal();
 int read_terminal_write_socket();
 int fork_and_handle_io();
+void handle_sigchld(int, siginfo_t *, void *);
 
 int main(int argc, char **argv)
 {
     int error_status;
+
     if (argc < 2)
     {
-        perror("Usage: client HOST_IP");
+        printf("Usage: client HOST_IP");
         exit(EXIT_FAILURE);
     }
 
@@ -45,16 +48,31 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+  #ifdef DEBUG
+    printf("Connected\n");
+  #endif
+
     if (run_protocol() != 0)
     {
         perror("Protocol failed. Exiting.");
         exit(EXIT_FAILURE);
     }
 
+  #ifdef DEBUG
+    printf("protocol success\n");
+  #endif
+
     error_status = fork_and_handle_io();
 
-    close(FD);
+    if (close(FD) == -1)
+    {
+        perror("Failed to close socket\n");
+        exit(EXIT_FAILURE);
+    }
 
+  #ifdef DEBUG
+    printf("Exiting: %d\n", error_status);
+  #endif
     exit(error_status);
 }
 
@@ -79,10 +97,10 @@ int connect_to_server(char *host)
         perror(error_string);
         return 1;
     }
-  #ifdef DEBUG
-    printf("Connected\n");
-  #endif
-    return 0;
+    else
+    {
+        return 0;
+    }
 }
 
 int run_protocol()
@@ -93,11 +111,10 @@ int run_protocol()
     {
         return 1;
     }
-
-  #ifdef DEBUG
-    printf("protocol success\n");
-  #endif
-    return 0;
+    else
+    {
+        return 0;
+    }
 }
 
 int fork_and_handle_io()
@@ -116,28 +133,66 @@ int fork_and_handle_io()
     else
     {
         int err_status;
+
+        struct sigaction sa;
+        sa.sa_sigaction = &handle_sigchld;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_NOCLDSTOP;
+
+        if (sigaction(SIGCHLD, &sa, 0) == -1)
+        {
+            perror("Unable to setup sigaction");
+            return 1;
+        }
+
         // Stash error status to use for later --
         //   If there was an IO failure, we still ought to
         //   collect the child process before returning error status
         err_status = read_socket_write_terminal();
 
-        int wait_res;
-        int status;
-        if ((wait_res = waitpid(child_pid, &status, WNOHANG)) == -1)
+        if (kill(child_pid, 9) == -1)
+        {
+            perror("Kill() failed");
+            err_status = 1;
+        }
+        if (wait(NULL) == -1)
         {
             perror("Wait failed");
-            return 1;
+            err_status = 1;
         }
-        // If the child has not exited, kill it!
-        else if (wait_res == 0)
-        {
-            kill(child_pid, 9);
-            wait(&status);
-        }
+
       #ifdef DEBUG
-        printf("Collectd child: %d\n", status);
+        printf("Collectd child\n");
       #endif
         return err_status;
+    }
+}
+
+void handle_sigchld(int signo, siginfo_t *info, void *context)
+{
+    int status;
+    int exit_code;
+
+  #ifdef DEBUG
+    printf("PID that raised signal: %d\n", info->si_pid);
+  #endif
+    if (waitpid((pid_t) (-1), &status, WNOHANG) > 0)
+    {
+        // collected child
+        exit_code = !(WIFEXITED(status) && !WEXITSTATUS(status));
+      #ifdef DEBUG
+        printf("Exiting: %d\n", exit_code);
+      #endif
+        exit(exit_code);
+
+    }
+    else
+    {
+      #ifdef DEBUG
+        printf("Recvd SIGCHLD with no child to collect\n");
+      #endif
+        // SIGCHLD was raised erroneously
+        return;
     }
 }
 
@@ -159,7 +214,10 @@ int read_socket_write_terminal()
     {
         return 1;
     }
-    return 0;
+    else
+    {
+        return 0;
+    }
 }
 
 int read_terminal_write_socket()
@@ -174,10 +232,6 @@ int read_terminal_write_socket()
         {
             return 1; // On error, return
         }
-    }
-    if (safe_write("exit\n") != 0)
-    {
-        return 1;
     }
     return 0;
 }
@@ -208,5 +262,8 @@ int safe_read(char const *expected)
         perror("Server gave incorrect protocol\n");
         return 1;
     }
-    return 0;
+    else
+    {
+        return 0;
+    }
 }
