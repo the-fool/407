@@ -14,7 +14,7 @@
 #include <sys/wait.h>
 
 #define PORT     4070
-#define SECRET   "cs407rembash"
+#define SECRET   "<cs407rembash>\n"
 #define BUFF_MAX 512
 #define REMBASH  "<rembash>\n"
 #define OK       "<ok>\n"
