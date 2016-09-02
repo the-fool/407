@@ -120,7 +120,6 @@ int run_protocol()
 int fork_and_handle_io()
 {
     int child_pid;
-
     if ((child_pid = fork()) == -1)
     {
         perror("Unable to fork()");
@@ -133,7 +132,6 @@ int fork_and_handle_io()
     else
     {
         int err_status;
-
         struct sigaction sa;
         sa.sa_sigaction = &handle_sigchld;
         sigemptyset(&sa.sa_mask);
@@ -149,21 +147,16 @@ int fork_and_handle_io()
         //   If there was an IO failure, we still ought to
         //   collect the child process before returning error status
         err_status = read_socket_write_terminal();
-
+        #ifdef DEBUG
+        printf("Error status for parent: %d\n", err_status);
+        #endif
+        // Only reach here if parent's IO loop breaks before childs
         if (kill(child_pid, 9) == -1)
         {
             perror("Kill() failed");
             err_status = 1;
         }
-        // if (wait(NULL) == -1)
-        // {
-        //     perror("Wait failed");
-        //     err_status = 1;
-        // }
-
-      #ifdef DEBUG
-        printf("Collectd child\n");
-      #endif
+        // unreachable, since signal handler for SIGCHLD will terminate process
         return err_status;
     }
 }
@@ -187,7 +180,7 @@ void handle_sigchld(int signo, siginfo_t *info, void *context)
     }
     else
     {
-      // SIGCHLD was raised erroneously
+        // SIGCHLD was raised erroneously
       #ifdef DEBUG
         printf("Recvd SIGCHLD with no child to collect\n");
       #endif
