@@ -58,10 +58,6 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
-  #ifdef DEBUG
-    printf("protocol success\n");
-  #endif
-
     error_status = fork_and_handle_io();
 
     if (close(FD) == -1)
@@ -150,7 +146,7 @@ int fork_and_handle_io()
         #ifdef DEBUG
         printf("Error status for parent: %d\n", err_status);
         #endif
-        // Only reach here if parent's IO loop breaks before childs
+        // Only reach here if parent's IO loop breaks before child's
         if (kill(child_pid, 9) == -1)
         {
             perror("Kill() failed");
@@ -221,7 +217,7 @@ int read_terminal_write_socket()
     {
         if (safe_write(buff) != 0)
         {
-            return 1; // On error, return
+            return 1;
         }
     }
     return 0;
