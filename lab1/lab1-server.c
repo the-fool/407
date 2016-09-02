@@ -96,7 +96,6 @@ int main()
             fprintf(stderr, "Client failed rembash protocol handshake\n");
           #endif
         }
-
         // Close parent-process copy of file descriptor
         close(client_socket_fd);
     }
