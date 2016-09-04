@@ -1,5 +1,6 @@
-// #define _GNU_SOURCE
+#define _GNU_SOURCE
 
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -10,6 +11,8 @@
 #include <signal.h>
 #include <unistd.h>
 #include <stdlib.h>
+
+#include "readline.c"
 
 #define PORT     4070
 #define SECRET   "<cs407rembash>\n"
@@ -37,6 +40,8 @@ int main()
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
+    int i=1;
+    setsockopt(server_socket_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i));
 
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -147,19 +152,17 @@ int safe_write(const int fd, char const *message)
 
 int safe_read(const int fd, char const *expected)
 {
-    char buff[BUFF_MAX];
-    int read_len;
+    char* line;
 
-    if ((read_len = read(fd, buff, BUFF_MAX)) <= 0)
+    if ((line = readline(fd)) == NULL)
     {
         perror("Error reading from client\n");
         return 1;
     }
 
-    if ((unsigned int) read_len != strlen(expected) ||
-        strncmp(expected, buff, read_len))
+    if (strcmp(expected, line))
     {
-        perror("Client gave incorrect protocol\n");
+        fprintf(stderr, "Client gave incorrect protocol\n");
         safe_write(fd, ERROR);
         return 1;
     }

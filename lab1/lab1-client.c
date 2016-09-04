@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #define _BSD_SOURCE
 
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -12,6 +13,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+
+#include "readline.c"
 
 #define PORT     4070
 #define SECRET   "<cs407rembash>\n"
@@ -54,7 +57,7 @@ int main(int argc, char **argv)
 
     if (run_protocol() != 0)
     {
-        perror("Protocol failed. Exiting.");
+        fprintf(stderr, "Protocol failed. Exiting.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -235,18 +238,17 @@ int safe_write(char const *message)
 
 int safe_read(char const *expected)
 {
-    char buff[BUFF_MAX];
-    int read_len;
+    char* line;
 
-    if ((read_len = read(FD, buff, BUFF_MAX)) <= 0)
+    if ((line = readline(FD)) == NULL)
     {
         perror("Error reading from server\n");
         return 1;
     }
 
-    if ((unsigned int) read_len != strlen(expected) || strncmp(expected, buff, read_len))
+    if (strcmp(expected, line))
     {
-        perror("Server gave incorrect protocol\n");
+        fprintf(stderr, "Server gave incorrect protocol\n");
         return 1;
     }
     else
