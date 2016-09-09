@@ -1,25 +1,26 @@
 #!/bin/bash
-set -e
+cleanup () {
+  killall server
+  killall client
+}
 
-make debug || (cowsay "build FAIL!" && exit 1)
+make install || (echo ":: Build FAIL!" && exit 1)
 
 ./server &
-
 ps -p $! -o pid= &> /dev/null
 if [ $? -ne 0 ]
 then
-    cowsay "Server FAILED to start!"
+    echo ":: Server FAILED to start!"
     exit 1
 fi
 
-./client
+./client 127.0.0.1 &
+ps -p $! -o pid= &> /dev/null
 if [ $? -ne 0 ]
 then
-    cowsay "Client FAILED!"
+    echo ":: Client FAILED to start!"
+    cleanup
     exit 1
 fi
 
-killall server # For some reason, `kill %1` won't work?!
-
-cowsay "smoke test PASSED. that deserves a smoke"
 exit 0
