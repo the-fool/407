@@ -1,3 +1,7 @@
+#include <stdlib.h>
+#include <errno.h>
+#include <stdio.h>
+#include <unistd.h>
 //Function readline:
 //Reads the next line from an open file descriptor, and returns it
 //as a valid C string (terminating newline not included).
@@ -45,7 +49,7 @@ char *readline(int fd)
 
   //See if line_buff needs to be initialized:
   if (line_buff == NULL) {
-    if ((line_buff = malloc(LINE_BUFFER_INCREMENT)) == NULL)
+    if ((line_buff = (char *)malloc(LINE_BUFFER_INCREMENT)) == NULL)
       return NULL;
     line_buff_size = LINE_BUFFER_INCREMENT; }
 
@@ -59,9 +63,9 @@ char *readline(int fd)
     //If EOL not reached, store next char:
     if (next_char != '\n') {
       if ((line_buff_size - line_buff_pos) < 3) {
-        if ((temp_line_buff = realloc(line_buff,line_buff_size + LINE_BUFFER_INCREMENT)) == NULL)
+        if ((temp_line_buff = (char *)realloc(line_buff,line_buff_size + LINE_BUFFER_INCREMENT)) == NULL)
           break;
-        line_buff_size = line_buff_size + LINE_BUFFER_INCREMENT; 
+        line_buff_size = line_buff_size + LINE_BUFFER_INCREMENT;
         line_buff = temp_line_buff; }
       line_buff[line_buff_pos++] = next_char; } }
   while (next_char != '\n');

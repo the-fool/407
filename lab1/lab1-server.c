@@ -2,8 +2,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
-#include <sys/types.h>
-#include <sys/socket.h>
+
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <fcntl.h>
@@ -12,6 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -26,9 +28,10 @@
 
 // The connection handler will fork() 2 children to be
 // collected in a sigaction
-struct Child_Pids {
-  pid_t pty;
-  pid_t socket_to_pty;
+struct Child_Pids
+{
+    pid_t pty;
+    pid_t socket_to_pty;
 } CHILD_PIDS;
 
 int run_protocol(int connect_fd);
@@ -180,9 +183,9 @@ void handle_client(int fd)
 
     int master_fd;
     CHILD_PIDS.pty = forkpty(&master_fd, NULL, NULL, NULL);
-    if (slave == -1)
+    if (CHILD_PIDS.pty == -1)
     {
-        char *err = "forkpty failed";
+        const char *err = "forkpty failed";
         perror(err);
         write(fd, err, strlen(err));
         return;
@@ -200,18 +203,18 @@ void handle_client(int fd)
         return;
     }
 
-    int nread;
+    int nread = 0;
     char buff[BUFF_MAX];
     if (CHILD_PIDS.socket_to_pty == 0)
     {
-        while ( (nread = read(fd, buff, BUFF_MAX)) > 0)
+        while ((nread = read(fd, buff, BUFF_MAX)) > 0)
         {
             write(master_fd, buff, nread);
         }
     }
     else
     {
-        while ( (nread = read(master_fd, buff, nread)) > 0)
+        while ((nread = read(master_fd, buff, nread)) > 0)
         {
             write(fd, buff, nread);
         }
