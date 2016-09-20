@@ -1,16 +1,18 @@
 #define _GNU_SOURCE
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
-#include <string.h>
 #include <fcntl.h>
-#include <stdio.h>
+#include <pty.h>
 #include <signal.h>
-#include <unistd.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <termios.h>
+#include <unistd.h>
 
 #include "readline.c"
 
@@ -108,6 +110,7 @@ int main()
 
 void handle_client(int fd)
 {
+    /*
     if (dup2(fd, STDOUT_FILENO) == -1 || dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDERR_FILENO) == -1)
     {
         perror("Dup2 failed");
@@ -117,13 +120,37 @@ void handle_client(int fd)
     {
         perror("Error closing duplicate file descriptor");
         exit(EXIT_FAILURE);
-    }
-    setsid();
-    if (execlp("bash", "bash", "--noediting", "-i", NULL) == -1)
-    {
+    }*/
+    int master_fd;
+    pid_t slave;
+    slave = forkpty(&master_fd, NULL, NULL, NULL);
+    if (slave == -1) {
+        char* err = "forkpty failed";
+        perror(err);
+        write(fd, err, strlen(err));
+        return;
+    } else if (slave == 0) {
+        execlp("bash", "bash", NULL);
         perror("Error execing bash");
         exit(EXIT_FAILURE);
     }
+
+    pid_t child;
+    if ((child = fork()) == -1) {
+        perror("fork failed");
+        return;
+    }
+      int nread;
+        char buff[BUFF_MAX];
+    if (child == 0) {
+        while ( (nread = read(fd, buff, BUFF_MAX)) > 0) {
+            write(master_fd, buff, nread);
+        }
+    } else {
+        while ( (nread = read(master_fd, buff, nread)) > 0) {
+            write(fd, buff, nread);
+        }
+    }    
 }
 
 int run_protocol(int fd)

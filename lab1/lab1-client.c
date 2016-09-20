@@ -13,7 +13,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-
+#include <termios.h>
+#include <unistd.h>
 #include "readline.c"
 
 #define PORT     4070
@@ -32,7 +33,11 @@ int read_socket_write_terminal();
 int read_terminal_write_socket();
 int fork_and_handle_io();
 void handle_sigchld(int, siginfo_t *, void *);
-
+struct termios saved_attributes;
+void reset_input_mode()
+{
+    tcsetattr(STDIN_FILENO, TCSANOW, &saved_attributes);
+}
 int main(int argc, char **argv)
 {
     int error_status;
@@ -215,7 +220,24 @@ int read_terminal_write_socket()
 {
     char *buff = (char *) malloc(BUFF_MAX);
     size_t n = BUFF_MAX;
+    if (!isatty(STDIN_FILENO))
+    {
+        fprintf (stderr, "Not a terminal.\n");
+        exit (EXIT_FAILURE);
+    }
 
+    // Save the terminal attributes so we can restore them later.
+    /*tcgetattr(STDIN_FILENO, &saved_attributes);
+    atexit(reset_input_mode);
+
+    // Set the funny terminal modes.
+    struct termios tattr;
+    tcgetattr(STDIN_FILENO, &tattr);
+    tattr.c_lflag &= ~(ICANON | ECHO); // Clear ICANON and ECHO.
+    tattr.c_cc[VMIN] = 1;
+    tattr.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr);
+    */
     while (getline(&buff, &n, stdin) > 0)
     {
         if (safe_write(buff) != 0)
