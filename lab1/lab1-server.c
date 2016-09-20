@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <fcntl.h>
 #include <pty.h>
 #include <signal.h>
@@ -44,7 +45,10 @@ int main()
     }
     int i=1;
     setsockopt(server_socket_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i));
-
+    if (setsockopt(server_socket_fd, IPPROTO_TCP, TCP_NODELAY, &i, sizeof(i))) {
+        perror("setsockopt TCP_NODELAY");
+        exit(EXIT_FAILURE);
+    }
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);
     server_address.sin_port = htons(PORT);
@@ -140,8 +144,8 @@ void handle_client(int fd)
         perror("fork failed");
         return;
     }
-      int nread;
-        char buff[BUFF_MAX];
+    int nread;
+    char buff[BUFF_MAX];
     if (child == 0) {
         while ( (nread = read(fd, buff, BUFF_MAX)) > 0) {
             write(master_fd, buff, nread);
