@@ -158,17 +158,6 @@ void handle_sigchld(int signo, siginfo_t *info, void *context)
 
 void handle_client(int fd)
 {
-    /*
-       if (dup2(fd, STDOUT_FILENO) == -1 || dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDERR_FILENO) == -1)
-       {
-        perror("Dup2 failed");
-        exit(EXIT_FAILURE);
-       }
-       if (close(fd) == -1)
-       {
-        perror("Error closing duplicate file descriptor");
-        exit(EXIT_FAILURE);
-       }*/
     struct sigaction sa;
 
     sa.sa_sigaction = &handle_sigchld;
