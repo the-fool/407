@@ -24,6 +24,13 @@
 #define OK       "<ok>\n"
 #define ERROR    "<error>\n"
 
+// The connection handler will fork() 2 children to be
+// collected in a sigaction
+struct Child_Pids {
+  pid_t pty;
+  pid_t socket_to_pty;
+} CHILD_PIDS;
+
 int run_protocol(int connect_fd);
 int safe_write(const int fd, char const *msg);
 int safe_read(const int fd, char const *expected);
@@ -43,9 +50,10 @@ int main()
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
-    int i=1;
+    int i = 1;
     setsockopt(server_socket_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i));
-    if (setsockopt(server_socket_fd, IPPROTO_TCP, TCP_NODELAY, &i, sizeof(i))) {
+    if (setsockopt(server_socket_fd, IPPROTO_TCP, TCP_NODELAY, &i, sizeof(i)))
+    {
         perror("setsockopt TCP_NODELAY");
         exit(EXIT_FAILURE);
     }
@@ -112,49 +120,102 @@ int main()
     }
 }
 
+void handle_sigchld(int signo, siginfo_t *info, void *context)
+{
+    int status;
+    int exit_code;
+    pid_t first_terminated;
+    pid_t to_terminate;
+
+  #ifdef DEBUG
+    printf("PID that raised signal: %d\n", info->si_pid);
+  #endif
+
+    if ( (first_terminated = waitpid((pid_t) (-1), &status, WNOHANG)) > 0)
+    {
+        exit_code = !(WIFEXITED(status) && !WEXITSTATUS(status));
+        // Ascertain the remaining PID and terminate
+        to_terminate = CHILD_PIDS.pty == first_terminated ? CHILD_PIDS.socket_to_pty : CHILD_PIDS.pty;
+        kill(to_terminate, SIGINT);
+        wait(NULL);
+      #ifdef DEBUG
+        printf("Exiting: %d\n", exit_code);
+      #endif
+        exit(exit_code);
+    }
+    else
+    {
+        // SIGCHLD was raised erroneously
+      #ifdef DEBUG
+        printf("Recvd SIGCHLD with no child to collect\n");
+      #endif
+        return;
+    }
+}
+
 void handle_client(int fd)
 {
     /*
-    if (dup2(fd, STDOUT_FILENO) == -1 || dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDERR_FILENO) == -1)
-    {
+       if (dup2(fd, STDOUT_FILENO) == -1 || dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDERR_FILENO) == -1)
+       {
         perror("Dup2 failed");
         exit(EXIT_FAILURE);
-    }
-    if (close(fd) == -1)
-    {
+       }
+       if (close(fd) == -1)
+       {
         perror("Error closing duplicate file descriptor");
         exit(EXIT_FAILURE);
-    }*/
+       }*/
+    struct sigaction sa;
+
+    sa.sa_sigaction = &handle_sigchld;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_NOCLDSTOP;
+
+    if (sigaction(SIGCHLD, &sa, 0) == -1)
+    {
+        perror("Unable to setup sigaction");
+        exit(EXIT_FAILURE);
+    }
+
     int master_fd;
-    pid_t slave;
-    slave = forkpty(&master_fd, NULL, NULL, NULL);
-    if (slave == -1) {
-        char* err = "forkpty failed";
+    CHILD_PIDS.pty = forkpty(&master_fd, NULL, NULL, NULL);
+    if (slave == -1)
+    {
+        char *err = "forkpty failed";
         perror(err);
         write(fd, err, strlen(err));
         return;
-    } else if (slave == 0) {
+    }
+    else if (CHILD_PIDS.pty == 0)
+    {
         execlp("bash", "bash", NULL);
         perror("Error execing bash");
         exit(EXIT_FAILURE);
     }
 
-    pid_t child;
-    if ((child = fork()) == -1) {
+    if ((CHILD_PIDS.socket_to_pty = fork()) == -1)
+    {
         perror("fork failed");
         return;
     }
+
     int nread;
     char buff[BUFF_MAX];
-    if (child == 0) {
-        while ( (nread = read(fd, buff, BUFF_MAX)) > 0) {
+    if (CHILD_PIDS.socket_to_pty == 0)
+    {
+        while ( (nread = read(fd, buff, BUFF_MAX)) > 0)
+        {
             write(master_fd, buff, nread);
         }
-    } else {
-        while ( (nread = read(master_fd, buff, nread)) > 0) {
+    }
+    else
+    {
+        while ( (nread = read(master_fd, buff, nread)) > 0)
+        {
             write(fd, buff, nread);
         }
-    }    
+    }
 }
 
 int run_protocol(int fd)
@@ -183,7 +244,7 @@ int safe_write(const int fd, char const *message)
 
 int safe_read(const int fd, char const *expected)
 {
-    char* line;
+    char *line;
 
     if ((line = readline(fd)) == NULL)
     {
