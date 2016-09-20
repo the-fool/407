@@ -24,20 +24,19 @@
 #define OK       "<ok>\n"
 
 int FD; // Global socket file-descriptor, for convenience
+struct termios TTY_ATTRIBUTES;
 
 int safe_write(char const *message);
 int safe_read(char const *expected);
 int connect_to_server(char *host);
 int run_protocol();
+int set_tty_attributes();
 int read_socket_write_terminal();
 int read_terminal_write_socket();
 int fork_and_handle_io();
 void handle_sigchld(int, siginfo_t *, void *);
-struct termios saved_attributes;
-void reset_input_mode()
-{
-    tcsetattr(STDIN_FILENO, TCSANOW, &saved_attributes);
-}
+void reset_tty();
+
 int main(int argc, char **argv)
 {
     int error_status;
@@ -66,6 +65,11 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+    if (set_tty_attributes() != 0)
+    {
+        fprintf(stderr, "Unable to set terminal attributes\n");
+        exit(EXIT_FAILURE);
+    }
     error_status = fork_and_handle_io();
 
     if (close(FD) == -1)
@@ -121,35 +125,44 @@ int run_protocol()
     }
 }
 
+int set_tty_attributes()
+{
+    if (!isatty(STDIN_FILENO))
+    {
+        fprintf(stderr, "Not using terminal.\n");
+        return 1;
+    }
+    // Stash terminal attributes
+    tcgetattr(STDIN_FILENO, &TTY_ATTRIBUTES);
+    atexit(reset_tty);
+
+    // Remove canon and echo
+    // Allow for minimal min
+    struct termios tattr;
+    tcgetattr(STDIN_FILENO, &tattr);
+    tattr.c_lflag &= ~(ICANON | ECHO );
+    tattr.c_cc[VMIN] = 1;
+    tattr.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr))
+    {
+        perror("tcsetattr");
+        return 1;
+    }
+    return 0;
+}
+
 int fork_and_handle_io()
 {
     int child_pid;
+
     if ((child_pid = fork()) == -1)
     {
         perror("Unable to fork()");
         return 1;
     }
-    
     else if (child_pid == 0)
     {
-        if (!isatty(STDIN_FILENO))
-        {
-            fprintf (stderr, "Not a terminal.\n");
-            exit (EXIT_FAILURE);
-        }
-
-        // Save the terminal attributes so we can restore them later.
-        tcgetattr(STDIN_FILENO, &saved_attributes);
-        atexit(reset_input_mode);
-
-        // Set the funny terminal modes.
-        struct termios tattr;
-        tcgetattr(STDIN_FILENO, &tattr);
-        tattr.c_lflag &= ~(ICANON | ECHO ); // Clear ICANON and ECHO.
-        tattr.c_cc[VMIN] = 1;
-        tattr.c_cc[VTIME] = 0;
-        
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr);
         return read_terminal_write_socket();
     }
     else
@@ -170,7 +183,7 @@ int fork_and_handle_io()
         //   If there was an IO failure, we still ought to
         //   collect the child process before returning error status
         err_status = read_socket_write_terminal();
-        
+
         #ifdef DEBUG
         printf("Error status for parent: %d\n", err_status);
         #endif
@@ -249,7 +262,7 @@ int read_terminal_write_socket()
         }
     }
     #ifdef DEBUG
-        printf("Child reading terminal exiting normally\n");
+    printf("Child reading terminal exiting normally\n");
     #endif
     return 0;
 }
@@ -266,7 +279,7 @@ int safe_write(char const *message)
 
 int safe_read(char const *expected)
 {
-    char* line;
+    char *line;
 
     if ((line = readline(FD)) == NULL)
     {
@@ -283,4 +296,9 @@ int safe_read(char const *expected)
     {
         return 0;
     }
+}
+
+void reset_tty()
+{
+    tcsetattr(STDIN_FILENO, TCSANOW, &TTY_ATTRIBUTES);
 }

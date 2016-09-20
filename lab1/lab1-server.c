@@ -181,8 +181,8 @@ void handle_client(int fd)
         exit(EXIT_FAILURE);
     }
 
-    int master_fd;
-    CHILD_PIDS.pty = forkpty(&master_fd, NULL, NULL, NULL);
+    int pty_fd;
+    CHILD_PIDS.pty = forkpty(&pty_fd, NULL, NULL, NULL);
     if (CHILD_PIDS.pty == -1)
     {
         const char *err = "forkpty failed";
@@ -209,12 +209,12 @@ void handle_client(int fd)
     {
         while ((nread = read(fd, buff, BUFF_MAX)) > 0)
         {
-            write(master_fd, buff, nread);
+            write(pty_fd, buff, nread);
         }
     }
     else
     {
-        while ((nread = read(master_fd, buff, nread)) > 0)
+        while ((nread = read(pty_fd, buff, BUFF_MAX)) > 0)
         {
             write(fd, buff, nread);
         }
