@@ -202,14 +202,20 @@ void handle_client(int fd)
     {
         while ((nread = read(fd, buff, 1)) > 0)
         {
-            write(pty_fd, buff, 1);
+            if (write(pty_fd, buff, 1) != 1) {
+              perror("Failed writing to pty master");
+              exit(EXIT_FAILURE);
+            }
         }
     }
     else
     {
         while ((nread = read(pty_fd, buff, BUFF_MAX)) > 0)
         {
-            write(fd, buff, nread);
+            if (write(fd, buff, nread) < 0) {
+                perror("Write to socket failed");
+                kill(CHILD_PIDS.socket_to_pty, SIGINT); // This call evokes sighandler, which cleans up and exits
+            }
         }
     }
 }
