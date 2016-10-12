@@ -38,12 +38,11 @@ int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
 int sigchld_to_sig_ign();
 int eager_write(int fd, const char * const msg, size_t len);
-void relay_bytes(int whence, int whither);
+int relay_bytes(int whence, int whither);
 void * io_loop(void *);
 void * handle_client(void * client_fd_ptr);
 void debug(int fd);
 void open_terminal_and_exec_bash(char * ptyslave);
-void shuttle_bytes_between(int socket_fd, int pty_fd);
 
 int efd;
 int client_fd_pairs[MAX_CLIENTS * 2 + 5];
@@ -60,7 +59,7 @@ int main()
         exit(EXIT_FAILURE);
     }
     // Ignore exited children
-    signal(SIGCHLD, SIG_IGN);
+    sigchld_to_sig_ign();
 
     if ((efd = epoll_create1(EPOLL_CLOEXEC)) == -1)
     {
@@ -242,7 +241,7 @@ int init_socket()
 }
 
 
-void relay_bytes(int whence, int whither)
+int relay_bytes(int whence, int whither)
 {
     static char buff[BUFF_MAX];
     static ssize_t nread;
@@ -259,6 +258,11 @@ void relay_bytes(int whence, int whither)
             break;
         }
     }
+    if (nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+      perror("Error reading");
+      return -1;
+    }
+    return 0;
 }
 
 
