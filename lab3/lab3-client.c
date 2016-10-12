@@ -19,26 +19,27 @@
 
 #define PORT     4070
 #define SECRET   "<cs407rembash>\n"
-#define BUFF_MAX 512
+#define BUFF_MAX 4096
 #define REMBASH  "<rembash>\n"
 #define OK       "<ok>\n"
 
-int safe_write(char const *message);
-int safe_read(char const *expected);
-int read_socket_write_terminal();
-int read_terminal_write_socket();
+int safe_write(const char * const message);
+int safe_read(char const * expected);
 int handle_io();
-void connect_to_server(char *host);
+int full_write(const char * const msg, int fd, size_t len);
+void read_socket_write_terminal();
+void read_terminal_write_socket();
+void connect_to_server(char * host);
 void run_protocol();
-void stash_termios(struct termios *ttyp);
-void reset_termios_attrs(struct termios *ttyp);
+void stash_termios(struct termios * ttyp);
+void reset_termios_attrs(struct termios * ttyp);
 void set_stdin_termios_attrs();
 void handle_sigchld(int, siginfo_t *, void *);
 
 int FD; // Global socket file-descriptor, for convenience
 struct termios stashed_termios_attr; // global terminal settings
 
-int main(int argc, char **argv)
+int main(int argc, char ** argv)
 {
     int error_status;
 
@@ -73,7 +74,7 @@ int main(int argc, char **argv)
 }
 
 
-void reset_termios_attrs(struct termios *ttyp)
+void reset_termios_attrs(struct termios * ttyp)
 {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, ttyp) == -1)
     {
@@ -82,7 +83,7 @@ void reset_termios_attrs(struct termios *ttyp)
     }
 }
 
-void stash_termios(struct termios *ttyp)
+void stash_termios(struct termios * ttyp)
 {
     if (!isatty(STDIN_FILENO))
     {
@@ -116,7 +117,7 @@ void set_stdin_termios_attrs()
 }
 
 
-void connect_to_server(char *host)
+void connect_to_server(char * host)
 {
     struct sockaddr_in socket_address;
     char error_string[128];
@@ -153,49 +154,44 @@ void run_protocol()
 int handle_io()
 {
     int child_pid;
+    struct sigaction sa;
 
-    if ((child_pid = fork()) == -1)
+    sa.sa_sigaction = &handle_sigchld;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_NOCLDSTOP;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGCHLD, &sa, 0) == -1)
     {
-        perror("Unable to fork()");
-        return 1;
+        perror("Unable to setup sigaction");
+        exit(EXIT_FAILURE);
     }
-    else if (child_pid == 0)
-    {
-        return read_terminal_write_socket();
-    }
-    else
-    {
-        int err_status;
-        struct sigaction sa;
-        sa.sa_sigaction = &handle_sigchld;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_NOCLDSTOP;
 
-        if (sigaction(SIGCHLD, &sa, 0) == -1)
-        {
-            perror("Unable to setup sigaction");
-            return 1;
-        }
-
-        // Stash error status to use for later --
-        //   If there was an IO failure, we still ought to
-        //   collect the child process before returning error status
-        err_status = read_socket_write_terminal();
-        #ifdef DEBUG
-        printf("Error status for parent: %d\n", err_status);
-        #endif
-        // Only reach here if parent's IO loop breaks before child's
-        if (kill(child_pid, 9) == -1)
-        {
-            perror("Kill() failed");
-            err_status = 1;
-        }
-        // unreachable, since signal handler for SIGCHLD will terminate process
-        return err_status;
+    switch (child_pid = fork())
+    {
+        case -1:
+            perror("fork failed");
+            exit(EXIT_FAILURE);
+        case 0:
+            read_terminal_write_socket();
+            exit(EXIT_FAILURE);
     }
+    int err_status;
+
+    read_socket_write_terminal();
+  #ifdef DEBUG
+    printf("Error status for parent: %d\n", err_status);
+  #endif
+    // Only reach here if parent's IO loop breaks before child's
+    if (kill(child_pid, 9) == -1)
+    {
+        perror("Kill() failed");
+        err_status = 1;
+    }
+    // unreachable, since signal handler for SIGCHLD will terminate process
+    return err_status;
+
 }
 
-void handle_sigchld(int signo, siginfo_t *info, void *context)
+void handle_sigchld(int signo, siginfo_t * info, void * context)
 {
     int status;
     int exit_code;
@@ -212,46 +208,47 @@ void handle_sigchld(int signo, siginfo_t *info, void *context)
     }
 }
 
-int read_socket_write_terminal()
+void read_socket_write_terminal()
 {
-    char *buff = (char *) malloc(BUFF_MAX);
-    size_t n = BUFF_MAX;
-    ssize_t sz;
+    char buff[BUFF_MAX];
+    int nread;
 
-    while ((sz = read(FD, buff, n)) > 0)
+    while ((nread = read(FD, buff, BUFF_MAX)) > 0)
     {
-        if (write(STDOUT_FILENO, buff, sz) == -1)
+        if (full_write(buff, STDOUT_FILENO, (size_t) nread) == -1)
         {
-            perror("Failed writing to stdout");
-            return 1;
+            break;
         }
     }
-    if (sz == -1)
+    if (errno)
     {
-        return 1;
+        perror("Error reading from socket and/or writing to stdout");
+    }
+}
+
+void read_terminal_write_socket()
+{
+    char buff[BUFF_MAX];
+    int nread;
+
+    while ((nread = read(STDIN_FILENO, buff, BUFF_MAX)) > 0)
+    {
+        if (full_write(buff, FD, (size_t) nread) == -1)
+        {
+            break;
+        }
+    }
+    if (errno)
+    {
+        perror("I/O error reading from terminal and/or writing to socket");
     }
     else
     {
-        return 0;
+        fprintf(stderr, "Connection to server broken unexpectedly");
     }
 }
 
-int read_terminal_write_socket()
-{
-    char *buff = (char *) malloc(BUFF_MAX);
-    size_t n = BUFF_MAX;
-
-    while (getline(&buff, &n, stdin) > 0)
-    {
-        if (safe_write(buff) != 0)
-        {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-int safe_write(char const *message)
+int safe_write(const char * const message)
 {
     if (write(FD, message, strlen(message)) == -1)
     {
@@ -261,9 +258,28 @@ int safe_write(char const *message)
     return 0;
 }
 
-int safe_read(char const *expected)
+int full_write(const char * const msg, int fd, size_t len)
 {
-    char *line;
+    static size_t accum = 0;
+    static int nwrote = 0;
+
+    do
+    {
+        if ((nwrote = write(fd, msg + accum, len - accum)) == -1)
+        {
+            break;
+        }
+        accum += nwrote;
+    }
+    while (accum < len);
+    accum = 0;
+    nwrote = 0;
+    return nwrote;
+}
+
+int safe_read(char const * expected)
+{
+    char * line;
 
     if ((line = readline(FD)) == NULL)
     {
