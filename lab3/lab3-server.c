@@ -94,11 +94,18 @@ int main()
 int setnonblocking(int sfd)
 {
     int flags, s;
+
     flags = fcntl(sfd, F_GETFL, 0);
-    if (flags == -1) { perror("fcntl"); return -1; }
+    if (flags == -1)
+    {
+        perror("fcntl"); return -1;
+    }
     flags |= O_NONBLOCK;
     s = fcntl(sfd, F_SETFL, flags);
-    if (s == -1) { perror("fcntl"); return -1; }
+    if (s == -1)
+    {
+        perror("fcntl"); return -1;
+    }
     return 0;
 }
 void * io_loop(void * _)
@@ -130,12 +137,14 @@ void * io_loop(void * _)
             if (evlist[i].events & EPOLLIN)
             {
                 relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]);
-            } else if (evlist[i].events & (EPOLLHUP | EPOLLERR)) {
+            }
+            else if (evlist[i].events & (EPOLLHUP | EPOLLERR))
+            {
               #ifdef DEBUG
-              printf("Recd EPOLLHUP or EPOLLERR -- closing fds\n");
+                printf("Recd EPOLLHUP or EPOLLERR on %d -- closing it and %d\n", evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]);
               #endif
-              close(client_fd_pairs[evlist[i].data.fd]);
-              close(evlist[i].data.fd);
+                close(client_fd_pairs[evlist[i].data.fd]);
+                close(evlist[i].data.fd);
             }
         }
     }
@@ -148,6 +157,7 @@ void * handle_client(void * client_fd_ptr)
     static int ptymaster_fd;
 
     int socket_fd = *(int *) client_fd_ptr;
+
     free(client_fd_ptr);
 
 
@@ -157,7 +167,7 @@ void * handle_client(void * client_fd_ptr)
         exit(EXIT_FAILURE);
     }
     setnonblocking(socket_fd);
-    if ((ptymaster_fd = posix_openpt(O_RDWR)) == -1)
+    if ((ptymaster_fd = posix_openpt(O_RDWR | O_CLOEXEC)) == -1)
     {
         perror("openpt failed");
         exit(EXIT_FAILURE);
@@ -236,15 +246,13 @@ void relay_bytes(int whence, int whither)
 {
     static char buff[BUFF_MAX];
     static ssize_t nread;
+
     #ifdef DEBUG
     printf("Relaying from %d to %d\n", whence, whither);
     #endif
     // does not handle malicious clients!
-    while((nread = read(whence, buff, BUFF_MAX)) > 0)
+    while ((nread = read(whence, buff, BUFF_MAX)) > 0)
     {
-        #ifdef DEBUG
-        printf("Read %d bytes\n", (int)nread);
-        #endif
         if (eager_write(whither, buff, nread) == -1)
         {
             perror("Failed writing");
