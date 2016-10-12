@@ -32,7 +32,7 @@
 #define ERROR       "<error>\n"
 
 int init_socket();
-int setnonblocking(int fd);
+int set_nonblocking(int fd);
 int handshake_protocol(int connect_fd);
 int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
@@ -90,20 +90,19 @@ int main()
         }
     }
 }
-int setnonblocking(int sfd)
-{
-    int flags, s;
 
-    flags = fcntl(sfd, F_GETFL, 0);
-    if (flags == -1)
-    {
-        perror("fcntl"); return -1;
+int set_nonblocking(int sfd)
+{
+    int flags;
+
+    if ((flags = fcntl(sfd, F_GETFL, 0)) == -1) {
+      perror("fcntl get flags");
+      return -1;
     }
     flags |= O_NONBLOCK;
-    s = fcntl(sfd, F_SETFL, flags);
-    if (s == -1)
-    {
-        perror("fcntl"); return -1;
+    if (fcntl(sfd, F_SETFL, flags) == -1) {
+      perror("fcntl set flags");
+      return -1;
     }
     return 0;
 }
@@ -135,7 +134,9 @@ void * io_loop(void * _)
         {
             if (evlist[i].events & EPOLLIN)
             {
-                relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]);
+                if (relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd])) {
+                  // TODO -- kill bash subprocess
+                }
             }
             else if (evlist[i].events & (EPOLLHUP | EPOLLERR))
             {
@@ -165,13 +166,13 @@ void * handle_client(void * client_fd_ptr)
         perror("Client failed protocol exchange");
         exit(EXIT_FAILURE);
     }
-    setnonblocking(socket_fd);
+    set_nonblocking(socket_fd);
     if ((ptymaster_fd = posix_openpt(O_RDWR | O_CLOEXEC)) == -1)
     {
         perror("openpt failed");
         exit(EXIT_FAILURE);
     }
-    setnonblocking(ptymaster_fd);
+    set_nonblocking(ptymaster_fd);
     unlockpt(ptymaster_fd);
     ptyslave = (char *) malloc(1024); // malloc first, to avoid race condition
     strcpy(ptyslave, ptsname(ptymaster_fd));
