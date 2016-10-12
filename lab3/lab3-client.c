@@ -25,7 +25,7 @@
 
 int safe_write(const char * const message);
 int safe_read(char const * expected);
-int full_write(const char * const msg, int fd, size_t len);
+int eager_write(int fd, const char * const msg, size_t len);
 void handle_io();
 void read_socket_write_terminal();
 void read_terminal_write_socket();
@@ -36,13 +36,11 @@ void reset_termios_attrs(struct termios * ttyp);
 void set_stdin_termios_attrs();
 void handle_sigchld(int, siginfo_t *, void *);
 
-int FD; // Global socket file-descriptor, for convenience
+int SERVER_FD; // Global socket file-descriptor, for convenience
 struct termios stashed_termios_attr; // global terminal settings
 
 int main(int argc, char ** argv)
 {
-    int error_status;
-
     if (argc != 2)
     {
         printf("Usage: client HOST_IP");
@@ -62,16 +60,13 @@ int main(int argc, char ** argv)
 
     handle_io();
 
-    if (close(FD) == -1)
+    if (close(SERVER_FD) == -1)
     {
         perror("Failed to close socket\n");
         exit(EXIT_FAILURE);
     }
     reset_termios_attrs(&stashed_termios_attr);
-  #ifdef DEBUG
-    printf("%d: Exiting: %d\n", getpid(), error_status);
-  #endif
-    exit(error_status);
+    exit(errno);
 }
 
 
@@ -123,8 +118,8 @@ void connect_to_server(char * host)
     struct sockaddr_in socket_address;
     char error_string[128];
 
-    FD = socket(AF_INET, SOCK_STREAM, 0);
-    if (FD == -1)
+    SERVER_FD = socket(AF_INET, SOCK_STREAM, 0);
+    if (SERVER_FD == -1)
     {
         perror("Unable to create socket\n");
         exit(EXIT_FAILURE);
@@ -133,7 +128,7 @@ void connect_to_server(char * host)
     socket_address.sin_family = AF_INET;
     socket_address.sin_port = htons(PORT);
 
-    if (connect(FD, (struct sockaddr *) &socket_address, sizeof socket_address) == -1)
+    if (connect(SERVER_FD, (struct sockaddr *) &socket_address, sizeof socket_address) == -1)
     {
         sprintf(error_string, "Unable to connect to %s:%d", host, PORT);
         perror(error_string);
@@ -194,9 +189,9 @@ void read_socket_write_terminal()
     char buff[BUFF_MAX];
     int nread;
 
-    while ((nread = read(FD, buff, BUFF_MAX)) > 0)
+    while ((nread = read(SERVER_FD, buff, BUFF_MAX)) > 0)
     {
-        if (full_write(buff, STDOUT_FILENO, (size_t) nread) == -1)
+        if (eager_write(STDOUT_FILENO, buff, (size_t) nread) == -1)
         {
             break;
         }
@@ -214,11 +209,14 @@ void read_terminal_write_socket()
 
     while ((nread = read(STDIN_FILENO, buff, BUFF_MAX)) > 0)
     {
-        if (full_write(buff, FD, (size_t) nread) == -1)
+        if (eager_write(SERVER_FD, buff, (size_t) nread) == -1)
         {
             break;
         }
     }
+    #ifdef DEBUG
+    printf("Client exiting loop\n");
+    #endif
     if (errno)
     {
         perror("I/O error reading from terminal and/or writing to socket");
@@ -231,7 +229,7 @@ void read_terminal_write_socket()
 
 int safe_write(const char * const message)
 {
-    if (full_write(message, FD, strlen(message)) == -1)
+    if (eager_write(SERVER_FD, message, strlen(message)) == -1)
     {
         perror("Failed to write\n");
         return 1;
@@ -239,7 +237,7 @@ int safe_write(const char * const message)
     return 0;
 }
 
-int full_write(const char * const msg, int fd, size_t len)
+int eager_write(int fd, const char * const msg, size_t len)
 {
     static size_t accum = 0;
     static int nwrote = 0;
@@ -262,7 +260,7 @@ int safe_read(char const * expected)
 {
     char * line;
 
-    if ((line = readline(FD)) == NULL)
+    if ((line = readline(SERVER_FD)) == NULL)
     {
         perror("Error reading from server\n");
         return 1;
