@@ -192,8 +192,8 @@ void * handle_client(void * client_fd_ptr)
 
     ev[0].data.fd = socket_fd;
     ev[1].data.fd = ptymaster_fd;
-    ev[0].events = EPOLLIN;
-    ev[1].events = EPOLLIN;
+    ev[0].events = EPOLLIN | EPOLLET;
+    ev[1].events = EPOLLIN | EPOLLET; 
     epoll_ctl(efd, EPOLL_CTL_ADD, socket_fd, ev);
     epoll_ctl(efd, EPOLL_CTL_ADD, ptymaster_fd, ev + 1);
 
