@@ -25,8 +25,8 @@
 
 int safe_write(const char * const message);
 int safe_read(char const * expected);
-int handle_io();
 int full_write(const char * const msg, int fd, size_t len);
+void handle_io();
 void read_socket_write_terminal();
 void read_terminal_write_socket();
 void connect_to_server(char * host);
@@ -56,10 +56,11 @@ int main(int argc, char ** argv)
   #endif
 
     run_protocol();
+
     stash_termios(&stashed_termios_attr);
     set_stdin_termios_attrs();
 
-    error_status = handle_io();
+    handle_io();
 
     if (close(FD) == -1)
     {
@@ -151,7 +152,7 @@ void run_protocol()
     }
 }
 
-int handle_io()
+void handle_io()
 {
     int child_pid;
     struct sigaction sa;
@@ -174,37 +175,17 @@ int handle_io()
             read_terminal_write_socket();
             exit(EXIT_FAILURE);
     }
-    int err_status;
 
     read_socket_write_terminal();
-  #ifdef DEBUG
-    printf("Error status for parent: %d\n", err_status);
-  #endif
-    // Only reach here if parent's IO loop breaks before child's
+
+    sa.sa_handler = SIG_IGN;
+    if (sigaction(SIGCHLD, &sa, 0) == -1)
+    {
+        perror("Unable to setup sigaction");
+    }
     if (kill(child_pid, 9) == -1)
     {
         perror("Kill() failed");
-        err_status = 1;
-    }
-    // unreachable, since signal handler for SIGCHLD will terminate process
-    return err_status;
-
-}
-
-void handle_sigchld(int signo, siginfo_t * info, void * context)
-{
-    int status;
-    int exit_code;
-
-    if (waitpid((pid_t) (-1), &status, WNOHANG) > 0)
-    {
-        // collected child
-        reset_termios_attrs(&stashed_termios_attr);
-        exit_code = !(WIFEXITED(status) && !WEXITSTATUS(status));
-      #ifdef DEBUG
-        printf("Exiting: %d\n", exit_code);
-      #endif
-        exit(exit_code);
     }
 }
 
@@ -250,7 +231,7 @@ void read_terminal_write_socket()
 
 int safe_write(const char * const message)
 {
-    if (write(FD, message, strlen(message)) == -1)
+    if (full_write(message, FD, strlen(message)) == -1)
     {
         perror("Failed to write\n");
         return 1;
@@ -295,5 +276,22 @@ int safe_read(char const * expected)
     else
     {
         return 0;
+    }
+}
+
+void handle_sigchld(int signo, siginfo_t * info, void * context)
+{
+    int status;
+    int exit_code;
+
+    if (waitpid((pid_t) (-1), &status, WNOHANG) > 0)
+    {
+        // collected child
+        reset_termios_attrs(&stashed_termios_attr);
+        exit_code = !(WIFEXITED(status) && !WEXITSTATUS(status));
+      #ifdef DEBUG
+        printf("Exiting: %d\n", exit_code);
+      #endif
+        exit(exit_code);
     }
 }
