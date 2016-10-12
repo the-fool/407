@@ -22,37 +22,37 @@
 
 #include "readline.c"
 
-#define PORT     4070
-#define SECRET   "<cs407rembash>\n"
-#define BUFF_MAX 4 * 1024
-#define REMBASH  "<rembash>\n"
-#define OK       "<ok>\n"
-#define ERROR    "<error>\n"
-
-// The connection handler will fork() 2 children to be
-// collected in a sigaction
-struct Child_Pids
-{
-    pid_t pty;
-    pid_t socket_to_pty;
-} CHILD_PIDS;
+#define BUFF_MAX    4 * 1024
+#define MAX_EVENTS  16
+#define MAX_CLIENTS 64 * 1000
+#define PORT        4070
+#define SECRET      "<cs407rembash>\n"
+#define REMBASH     "<rembash>\n"
+#define OK          "<ok>\n"
+#define ERROR       "<error>\n"
 
 int init_socket();
+int setnonblocking(int fd);
 int handshake_protocol(int connect_fd);
 int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
 int sigchld_to_sig_ign();
 int eager_write(int fd, const char * const msg, size_t len);
-void* handle_client(void * client_fd_ptr);
+void relay_bytes(int whence, int whither);
+void * io_loop(void *);
+void * handle_client(void * client_fd_ptr);
 void debug(int fd);
 void open_terminal_and_exec_bash(char * ptyslave);
 void shuttle_bytes_between(int socket_fd, int pty_fd);
+
+int efd;
+int client_fd_pairs[MAX_CLIENTS * 2 + 5];
 
 int main()
 {
     int server_socket_fd;
     int client_fd;
-    int* client_fd_ptr;
+    int * client_fd_ptr;
     pthread_t thread_id;
 
     if ((server_socket_fd = init_socket()) == -1)
@@ -62,51 +62,112 @@ int main()
     // Ignore exited children
     signal(SIGCHLD, SIG_IGN);
 
+    if ((efd = epoll_create1(EPOLL_CLOEXEC)) == -1)
+    {
+        perror("epoll creation failed");
+        exit(EXIT_FAILURE);
+    }
+    pthread_create(&thread_id, NULL, &io_loop, NULL);
     while (1)
     {
 #ifdef DEBUG
         printf("Server is waiting\n");
 #endif
-        if ((client_fd = accept(server_socket_fd, (struct sockaddr *) NULL, NULL)) == -1)
+        if ((client_fd = accept4(server_socket_fd, (struct sockaddr *) NULL, NULL, SOCK_CLOEXEC)) == -1)
         {
             perror("Socket accept failed");
         }
         else
         {
-          #ifdef DEBUG
-          printf("Received client\n");
-          #endif
-          client_fd_ptr = (int *) malloc(sizeof(int));
-          *client_fd_ptr = client_fd;
-          if (pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
-              perror("failed to create pthread");
-          }
+#ifdef DEBUG
+            printf("Received client\n");
+#endif
+            client_fd_ptr = (int *) malloc(sizeof(int));
+            *client_fd_ptr = client_fd;
+            if (pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr))
+            {
+                perror("failed to create pthread");
+            }
         }
     }
 }
-void* handle_client(void * client_fd_ptr)
+int setnonblocking(int sfd)
 {
-    char * ptyslave;
-    int ptymaster_fd;
-    int socket_fd = *(int *)client_fd_ptr;
+    int flags, s;
+    flags = fcntl(sfd, F_GETFL, 0);
+    if (flags == -1) { perror("fcntl"); return -1; }
+    flags |= O_NONBLOCK;
+    s = fcntl(sfd, F_SETFL, flags);
+    if (s == -1) { perror("fcntl"); return -1; }
+    return 0;
+}
+void * io_loop(void * _)
+{
+    struct epoll_event evlist[MAX_EVENTS];
+    int nevents;
+    int i;
+
+    while (1)
+    {
+        nevents = epoll_wait(efd, evlist, MAX_EVENTS, -1);
+        if (nevents == -1)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            else
+            {
+                perror("epoll wait");
+                exit(EXIT_FAILURE);
+            }
+        }
+        #ifdef DEBUG
+        printf("Recd %d events\n", nevents);
+        #endif
+        for (i = 0; i < nevents; i++)
+        {
+            if (evlist[i].events & EPOLLIN)
+            {
+                relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]);
+            } else if (evlist[i].events & (EPOLLHUP | EPOLLERR)) {
+              #ifdef DEBUG
+              printf("Recd EPOLLHUP or EPOLLERR -- closing fds\n");
+              #endif
+              close(client_fd_pairs[evlist[i].data.fd]);
+              close(evlist[i].data.fd);
+            }
+        }
+    }
+}
+
+void * handle_client(void * client_fd_ptr)
+{
+    static char * ptyslave;
+    static struct epoll_event ev[2];
+    static int ptymaster_fd;
+
+    int socket_fd = *(int *) client_fd_ptr;
     free(client_fd_ptr);
+
 
     if (handshake_protocol(socket_fd))
     {
         perror("Client failed protocol exchange");
         exit(EXIT_FAILURE);
     }
-
+    setnonblocking(socket_fd);
     if ((ptymaster_fd = posix_openpt(O_RDWR)) == -1)
     {
         perror("openpt failed");
         exit(EXIT_FAILURE);
     }
+    setnonblocking(ptymaster_fd);
     unlockpt(ptymaster_fd);
     ptyslave = (char *) malloc(1024); // malloc first, to avoid race condition
     strcpy(ptyslave, ptsname(ptymaster_fd));
 
-    switch (CHILD_PIDS.pty = fork())
+    switch (fork())
     {
         case -1:
             perror("fork failed");
@@ -116,13 +177,17 @@ void* handle_client(void * client_fd_ptr)
             open_terminal_and_exec_bash(ptyslave);
             exit(EXIT_FAILURE);
     }
-    shuttle_bytes_between(socket_fd, ptymaster_fd);
+    client_fd_pairs[socket_fd] = ptymaster_fd;
+    client_fd_pairs[ptymaster_fd] = socket_fd;
 
-    while (waitpid(-1, NULL, WNOHANG) > 0)
-    {
-        ;
-    }
-    exit(EXIT_SUCCESS);
+    ev[0].data.fd = socket_fd;
+    ev[1].data.fd = ptymaster_fd;
+    ev[0].events = EPOLLIN;
+    ev[1].events = EPOLLIN;
+    epoll_ctl(efd, EPOLL_CTL_ADD, socket_fd, ev);
+    epoll_ctl(efd, EPOLL_CTL_ADD, ptymaster_fd, ev + 1);
+
+    return NULL;
 }
 
 int init_socket()
@@ -166,83 +231,28 @@ int init_socket()
     return fd;
 }
 
-void handle_sigchld(int signo, siginfo_t * info, void * context)
+
+void relay_bytes(int whence, int whither)
 {
-    int status;
-    int exit_code;
-    pid_t first_terminated;
-    pid_t to_terminate;
-
-#ifdef DEBUG
-    printf("PID that raised signal: %d\n", info->si_pid);
-#endif
-
-    if ( (first_terminated = waitpid((pid_t) (-1), &status, WNOHANG)) > 0)
+    static char buff[BUFF_MAX];
+    static ssize_t nread;
+    #ifdef DEBUG
+    printf("Relaying from %d to %d\n", whence, whither);
+    #endif
+    // does not handle malicious clients!
+    while((nread = read(whence, buff, BUFF_MAX)) > 0)
     {
-        exit_code = !(WIFEXITED(status) && !WEXITSTATUS(status));
-        // Ascertain the remaining PID and terminate
-        to_terminate = CHILD_PIDS.pty == first_terminated ? CHILD_PIDS.socket_to_pty : CHILD_PIDS.pty;
-        kill(to_terminate, SIGINT);
-        wait(NULL);
-        exit(exit_code);
-    }
-}
-
-void shuttle_bytes_between(int socket_fd, int pty_fd)
-{
-    char buff[BUFF_MAX];
-    int nread;
-    struct sigaction sa;
-
-    sa.sa_sigaction = &handle_sigchld;
-    sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_NOCLDSTOP;
-    sigemptyset(&sa.sa_mask);
-
-    if (sigaction(SIGCHLD, &sa, 0) == -1)
-    {
-        perror("Unable to setup sigaction");
-        exit(EXIT_FAILURE);
-    }
-
-    switch (CHILD_PIDS.socket_to_pty = fork())
-    {
-        case -1:
-            perror("fork failed");
-            sigchld_to_sig_ign();
-            kill(CHILD_PIDS.pty, SIGTERM);
-            exit(EXIT_FAILURE);
-        case 0:
-            while ((nread = read(socket_fd, buff, BUFF_MAX)) > 0)
-            {
-                if (eager_write(pty_fd, buff, nread) == -1)
-                {
-                    perror("Failed writing to pty master");
-                    break;
-                }
-            }
-            if (errno)
-            {
-                perror("Error reading from socket or writing to pty master");
-            }
-            else
-            {
-                fprintf(stderr, "Client connection closed unexpectedly\n");
-            }
-            exit(EXIT_FAILURE);
-    }
-    // Parent :: Read from PTY and write to SOCKET
-    while ((nread = read(pty_fd, buff, BUFF_MAX)) > 0)
-    {
-        if (eager_write(socket_fd, buff, nread) == -1)
+        #ifdef DEBUG
+        printf("Read %d bytes\n", (int)nread);
+        #endif
+        if (eager_write(whither, buff, nread) == -1)
         {
-            perror("Write to socket failed");
+            perror("Failed writing");
+            break;
         }
     }
-
-    sigchld_to_sig_ign();
-    kill(CHILD_PIDS.pty, SIGTERM);
-    kill(CHILD_PIDS.socket_to_pty, SIGTERM);
 }
+
 
 int sigchld_to_sig_ign()
 {

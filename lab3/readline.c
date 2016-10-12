@@ -61,7 +61,7 @@ char *readline(int fd)
       if ((line_buff_size - line_buff_pos) < 3) {
         if ((temp_line_buff = realloc(line_buff,line_buff_size + LINE_BUFFER_INCREMENT)) == NULL)
           break;
-        line_buff_size = line_buff_size + LINE_BUFFER_INCREMENT; 
+        line_buff_size = line_buff_size + LINE_BUFFER_INCREMENT;
         line_buff = temp_line_buff; }
       line_buff[line_buff_pos++] = next_char; } }
   while (next_char != '\n');
