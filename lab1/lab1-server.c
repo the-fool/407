@@ -34,6 +34,7 @@ struct Child_Pids
     pid_t socket_to_pty;
 } CHILD_PIDS;
 
+int init_socket();
 int run_protocol(int connect_fd);
 int safe_write(const int fd, char const *msg);
 int safe_read(const int fd, char const *expected);
@@ -45,42 +46,10 @@ int main()
     int server_socket_fd;
     int client_socket_fd;
     int fork_status;
-    struct sockaddr_in server_address;
-    struct sockaddr_in client_address;
 
-    if ((server_socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-    {
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-    int i = 1;
-    if (setsockopt(server_socket_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
-      perror("setsockopt SO_REUSEADDR");
+    if ((server_socket_fd = init_socket()) == -1) {
       exit(EXIT_FAILURE);
-  }
-    if (setsockopt(server_socket_fd, IPPROTO_TCP, TCP_NODELAY, &i, sizeof(i)))
-    {
-        perror("setsockopt TCP_NODELAY");
-        exit(EXIT_FAILURE);
     }
-
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_address.sin_port = htons(PORT);
-
-    if (bind(server_socket_fd, (struct sockaddr *) &server_address, sizeof server_address) == -1)
-    {
-        perror("Bind failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // create queue
-    if (listen(server_socket_fd, 5) == -1)
-    {
-        perror("Listen failed\n");
-        exit(EXIT_FAILURE);
-    }
-
     // Ignore exited children
     signal(SIGCHLD, SIG_IGN);
 
@@ -89,12 +58,7 @@ int main()
       #ifdef DEBUG
         printf("Server is waiting\n");
       #endif
-        socklen_t client_len = sizeof client_address;
-        client_socket_fd = accept(
-                server_socket_fd,
-                (struct sockaddr *) &client_address,
-                &client_len
-                );
+        client_socket_fd = accept(server_socket_fd, (struct sockaddr *) NULL, NULL);
         if (client_socket_fd == -1)
         {
             perror("Socket accept failed\n");
@@ -125,6 +89,47 @@ int main()
         // Close parent-process copy of file descriptor
         close(client_socket_fd);
     }
+}
+
+int init_socket()
+{
+    int fd;
+    struct sockaddr_in addr;
+
+    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    {
+        perror("Socket creation failed");
+        return -1;
+    }
+    int i = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i)))
+    {
+        perror("setsockopt: SO_REUSEADDR");
+        return -1;
+    }
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &i, sizeof(i)))
+    {
+        perror("setsockopt: TCP_NODELAY");
+        return -1;
+    }
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(PORT);
+
+    if (bind(fd, (struct sockaddr *) &addr, sizeof addr) == -1)
+    {
+        perror("Bind failed");
+        return -1;
+    }
+
+    // create queue
+    if (listen(fd, 5) == -1)
+    {
+        perror("Listen failed\n");
+        return -1;
+    }
+
+    return fd;
 }
 
 void handle_sigchld(int signo, siginfo_t *info, void *context)
@@ -202,9 +207,10 @@ void handle_client(int fd)
     {
         while ((nread = read(fd, buff, 1)) > 0)
         {
-            if (write(pty_fd, buff, 1) != 1) {
-              perror("Failed writing to pty master");
-              exit(EXIT_FAILURE);
+            if (write(pty_fd, buff, 1) != 1)
+            {
+                perror("Failed writing to pty master");
+                exit(EXIT_FAILURE);
             }
         }
     }
@@ -212,7 +218,8 @@ void handle_client(int fd)
     {
         while ((nread = read(pty_fd, buff, BUFF_MAX)) > 0)
         {
-            if (write(fd, buff, nread) < 0) {
+            if (write(fd, buff, nread) < 0)
+            {
                 perror("Write to socket failed");
                 kill(CHILD_PIDS.socket_to_pty, SIGINT); // This call evokes sighandler, which cleans up and exits
             }
