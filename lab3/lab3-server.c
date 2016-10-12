@@ -69,7 +69,7 @@ int main()
 #endif
         if ((client_fd = accept(server_socket_fd, (struct sockaddr *) NULL, NULL)) == -1)
         {
-            perror("Socket accept failed\n");
+            perror("Socket accept failed");
         }
         else
         {
@@ -78,12 +78,51 @@ int main()
           #endif
           client_fd_ptr = (int *) malloc(sizeof(int));
           *client_fd_ptr = client_fd;
-          if (pthread_create(&thread_id, NULL, &handle_client, (void *)client_fd_ptr)) {
+          if (pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
               perror("failed to create pthread");
           }
-          close(client_fd);
         }
     }
+}
+void* handle_client(void * client_fd_ptr)
+{
+    char * ptyslave;
+    int ptymaster_fd;
+    int socket_fd = *(int *)client_fd_ptr;
+    free(client_fd_ptr);
+
+    if (handshake_protocol(socket_fd))
+    {
+        perror("Client failed protocol exchange");
+        exit(EXIT_FAILURE);
+    }
+
+    if ((ptymaster_fd = posix_openpt(O_RDWR)) == -1)
+    {
+        perror("openpt failed");
+        exit(EXIT_FAILURE);
+    }
+    unlockpt(ptymaster_fd);
+    ptyslave = (char *) malloc(1024); // malloc first, to avoid race condition
+    strcpy(ptyslave, ptsname(ptymaster_fd));
+
+    switch (CHILD_PIDS.pty = fork())
+    {
+        case -1:
+            perror("fork failed");
+            exit(EXIT_FAILURE);
+        case 0:
+            close(ptymaster_fd);
+            open_terminal_and_exec_bash(ptyslave);
+            exit(EXIT_FAILURE);
+    }
+    shuttle_bytes_between(socket_fd, ptymaster_fd);
+
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+    {
+        ;
+    }
+    exit(EXIT_SUCCESS);
 }
 
 int init_socket()
@@ -147,46 +186,6 @@ void handle_sigchld(int signo, siginfo_t * info, void * context)
         wait(NULL);
         exit(exit_code);
     }
-}
-
-void* handle_client(void * client_fd_ptr)
-{
-    char * ptyslave;
-    int ptymaster_fd;
-    int socket_fd = *(int *)client_fd_ptr;
-    free(client_fd_ptr);
-    if (handshake_protocol(socket_fd))
-    {
-        perror("Client failed protocol exchange");
-        exit(EXIT_FAILURE);
-    }
-
-    if ((ptymaster_fd = posix_openpt(O_RDWR)) == -1)
-    {
-        perror("openpt failed");
-        exit(EXIT_FAILURE);
-    }
-    unlockpt(ptymaster_fd);
-    ptyslave = (char *) malloc(1024); // malloc first, to avoid race condition
-    strcpy(ptyslave, ptsname(ptymaster_fd));
-
-    switch (CHILD_PIDS.pty = fork())
-    {
-        case -1:
-            perror("fork failed");
-            exit(EXIT_FAILURE);
-        case 0:
-            close(ptymaster_fd);
-            open_terminal_and_exec_bash(ptyslave);
-            exit(EXIT_FAILURE);
-    }
-    shuttle_bytes_between(socket_fd, ptymaster_fd);
-
-    while (waitpid(-1, NULL, WNOHANG) > 0)
-    {
-        ;
-    }
-    exit(EXIT_SUCCESS);
 }
 
 void shuttle_bytes_between(int socket_fd, int pty_fd)
@@ -294,11 +293,11 @@ int handshake_protocol(int fd)
     }
 }
 
-int safe_write(const int fd, char const * message)
+int safe_write(const int fd, char const * str)
 {
-    if (write(fd, message, strlen(message)) == -1)
+    if (write(fd, str, strlen(str)) == -1)
     {
-        perror("Failed to write\n");
+        perror("Failed to write");
         return 1;
     }
     return 0;
