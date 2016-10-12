@@ -3,15 +3,17 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
-
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <fcntl.h>
+#include <pthread.h>
 #include <pty.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -22,7 +24,7 @@
 
 #define PORT     4070
 #define SECRET   "<cs407rembash>\n"
-#define BUFF_MAX 512
+#define BUFF_MAX 4 * 1024
 #define REMBASH  "<rembash>\n"
 #define OK       "<ok>\n"
 #define ERROR    "<error>\n"
@@ -41,7 +43,7 @@ int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
 int sigchld_to_sig_ign();
 int eager_write(int fd, const char * const msg, size_t len);
-void handle_client(int connect_fd);
+void* handle_client(void * client_fd_ptr);
 void debug(int fd);
 void open_terminal_and_exec_bash(char * ptyslave);
 void shuttle_bytes_between(int socket_fd, int pty_fd);
@@ -49,7 +51,9 @@ void shuttle_bytes_between(int socket_fd, int pty_fd);
 int main()
 {
     int server_socket_fd;
-    int client_socket_fd;
+    int client_fd;
+    int* client_fd_ptr;
+    pthread_t thread_id;
 
     if ((server_socket_fd = init_socket()) == -1)
     {
@@ -63,31 +67,21 @@ int main()
 #ifdef DEBUG
         printf("Server is waiting\n");
 #endif
-        if ((client_socket_fd = accept(server_socket_fd, (struct sockaddr *) NULL, NULL)) == -1)
+        if ((client_fd = accept(server_socket_fd, (struct sockaddr *) NULL, NULL)) == -1)
         {
             perror("Socket accept failed\n");
         }
         else
         {
-            switch (fork())
-            {
-                case -1:
-                    perror("Fork failed");
-                    exit(EXIT_FAILURE);
-                case 0:
-#ifdef DEBUG
-                    printf("Received client\n");
-#endif
-                    close(server_socket_fd);
-                    handle_client(client_socket_fd);
-#ifdef DEBUG
-                    printf("Child process unexpectedly returned from handling client\n");
-#endif
-                    exit(EXIT_FAILURE);
-                default:
-                    close(client_socket_fd);
-
-            }
+          #ifdef DEBUG
+          printf("Received client\n");
+          #endif
+          client_fd_ptr = (int *) malloc(sizeof(int));
+          *client_fd_ptr = client_fd;
+          if (pthread_create(&thread_id, NULL, &handle_client, (void *)client_fd_ptr)) {
+              perror("failed to create pthread");
+          }
+          close(client_fd);
         }
     }
 }
@@ -155,11 +149,12 @@ void handle_sigchld(int signo, siginfo_t * info, void * context)
     }
 }
 
-void handle_client(int socket_fd)
+void* handle_client(void * client_fd_ptr)
 {
     char * ptyslave;
     int ptymaster_fd;
-
+    int socket_fd = *(int *)client_fd_ptr;
+    free(client_fd_ptr);
     if (handshake_protocol(socket_fd))
     {
         perror("Client failed protocol exchange");
@@ -196,7 +191,7 @@ void handle_client(int socket_fd)
 
 void shuttle_bytes_between(int socket_fd, int pty_fd)
 {
-    char buff[4096];
+    char buff[BUFF_MAX];
     int nread;
     struct sigaction sa;
 
@@ -218,7 +213,7 @@ void shuttle_bytes_between(int socket_fd, int pty_fd)
             kill(CHILD_PIDS.pty, SIGTERM);
             exit(EXIT_FAILURE);
         case 0:
-            while ((nread = read(socket_fd, buff, 4096)) > 0)
+            while ((nread = read(socket_fd, buff, BUFF_MAX)) > 0)
             {
                 if (eager_write(pty_fd, buff, nread) == -1)
                 {
