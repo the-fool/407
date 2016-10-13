@@ -138,9 +138,6 @@ void connect_to_server(char * host)
 
 void run_protocol()
 {
-    printf("Sleeping\n");
-    sleep(4);
-    printf("Awoken\n");
     if (safe_read(REMBASH) ||
         safe_write(SECRET) ||
         safe_read(OK))
@@ -265,7 +262,7 @@ int safe_read(char const * expected)
 
     if ((line = readline(SERVER_FD)) == NULL)
     {
-        perror("Error reading from server\n");
+        fprintf(stderr, "Error reading from server\n");
         return 1;
     }
 

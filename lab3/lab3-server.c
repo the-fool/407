@@ -310,27 +310,32 @@ void open_terminal_and_exec_bash(char * ptyslave)
 }
 
 void sigalrm_handler(int signal, siginfo_t *sip, void *ignore) {
-  printf("caught alarm, with value: %d\n", sip->si_int);
+
+  #ifdef DEBUG
+  printf("caught alarm, with value: %d\n", *(int *)(sip->si_ptr));
+  #endif
+  // set the flag to flown, which will be used in the handshake routine
+  // to determine failure.
+  // Most likely, though, a blocked read() call will get errored with EINTR
+  *(int*)sip->si_ptr = 1;
 }
 int handshake_protocol(int fd)
 {
     static struct sigevent sev;
     static struct itimerspec timer;
     static struct sigaction sa;
-
+    int alarmed_flag = 0;
     sa.sa_sigaction = &sigalrm_handler;
     sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGALRM, &sa, NULL) == -1) {
       perror("Setting up sigaction");
     }
-    printf("THREAD ID: %lu\n", syscall(__NR_gettid));
     sev.sigev_signo = SIGALRM;
     sev.sigev_notify = SIGEV_THREAD_ID;
-    sev.sigev_value.sival_int = fd;
+    sev.sigev_value.sival_ptr = &alarmed_flag;
     sev._sigev_un._tid = syscall(__NR_gettid);
-    timer.it_value.tv_sec = 2;
-    timer.it_interval.tv_sec = 0;
+    timer.it_value.tv_sec = 3;
     timer_t timerid;
     if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
       perror("timer create");
@@ -338,15 +343,14 @@ int handshake_protocol(int fd)
     if (timer_settime(timerid, 0, &timer, NULL) == -1) {
       perror("settime");
     }
-    if (safe_write(fd, REMBASH) ||
-        safe_read(fd, SECRET) ||
-        safe_write(fd, OK))
+    if (alarmed_flag || safe_write(fd, REMBASH) ||
+        alarmed_flag || safe_read(fd, SECRET) ||
+        alarmed_flag || safe_write(fd, OK))
     {
         return 1;
     }
     else
     {
-        printf("Deleting timer\n");
         timer_delete(timerid);
         return 0;
     }
