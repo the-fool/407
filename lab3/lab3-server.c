@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 600  // for posix_openpt(), etc.
 #define _GNU_SOURCE
 
@@ -17,6 +17,7 @@
 #include <sys/timerfd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
@@ -39,8 +40,10 @@ int handshake_protocol(int connect_fd);
 int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
 int sigchld_to_sig_ign();
+
 int eager_write(int fd, const char * const msg, size_t len);
 int relay_bytes(int whence, int whither);
+void sigalrm_handler(int signal, siginfo_t *sip, void *ignore);
 void * io_loop(void *);
 void * handle_client(void * client_fd_ptr);
 void debug(int fd);
@@ -166,13 +169,15 @@ void * handle_client(void * client_fd_ptr)
     if (handshake_protocol(socket_fd))
     {
         perror("Client failed protocol exchange");
-        exit(EXIT_FAILURE);
+        close(socket_fd);
+        return NULL;
     }
     set_nonblocking(socket_fd);
     if ((ptymaster_fd = posix_openpt(O_RDWR | O_CLOEXEC)) == -1)
     {
         perror("openpt failed");
-        exit(EXIT_FAILURE);
+        close(socket_fd);
+        return NULL;
     }
     set_nonblocking(ptymaster_fd);
     unlockpt(ptymaster_fd);
@@ -304,20 +309,35 @@ void open_terminal_and_exec_bash(char * ptyslave)
     exit(EXIT_FAILURE);
 }
 
+void sigalrm_handler(int signal, siginfo_t *sip, void *ignore) {
+  printf("caught alarm, with value: %d\n", sip->si_int);
+}
 int handshake_protocol(int fd)
 {
     static struct sigevent sev;
     static struct itimerspec timer;
-    timer.it_value.tv_nsec = 2000000000; // 2 seconds in nanoseconds
-    timer_t timerid;
+    static struct sigaction sa;
 
+    sa.sa_sigaction = &sigalrm_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGALRM, &sa, NULL) == -1) {
+      perror("Setting up sigaction");
+    }
+    printf("THREAD ID: %lu\n", syscall(__NR_gettid));
     sev.sigev_signo = SIGALRM;
     sev.sigev_notify = SIGEV_THREAD_ID;
-    sev.sigev_value.sival_ptr = &timerid;
-    sev._sigev_un._tid = pthread_self();
-
-    timer_create(CLOCK_REALTIME, &sev, &timerid);
-    timer_settime(timerid, 0, &timer, NULL);
+    sev.sigev_value.sival_int = fd;
+    sev._sigev_un._tid = syscall(__NR_gettid);
+    timer.it_value.tv_sec = 2;
+    timer.it_interval.tv_sec = 0;
+    timer_t timerid;
+    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
+      perror("timer create");
+    }
+    if (timer_settime(timerid, 0, &timer, NULL) == -1) {
+      perror("settime");
+    }
     if (safe_write(fd, REMBASH) ||
         safe_read(fd, SECRET) ||
         safe_write(fd, OK))
@@ -326,6 +346,7 @@ int handshake_protocol(int fd)
     }
     else
     {
+        printf("Deleting timer\n");
         timer_delete(timerid);
         return 0;
     }
@@ -347,7 +368,7 @@ int safe_read(const int fd, char const * expected)
 
     if ((line = readline(fd)) == NULL)
     {
-        perror("Error reading from client\n");
+        perror("Error reading from client");
         return 1;
     }
 

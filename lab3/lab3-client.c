@@ -62,7 +62,7 @@ int main(int argc, char ** argv)
 
     if (close(SERVER_FD) == -1)
     {
-        perror("Failed to close socket\n");
+        perror("Failed to close socket");
         exit(EXIT_FAILURE);
     }
     reset_termios_attrs(&stashed_termios_attr);
@@ -121,7 +121,7 @@ void connect_to_server(char * host)
     SERVER_FD = socket(AF_INET, SOCK_STREAM, 0);
     if (SERVER_FD == -1)
     {
-        perror("Unable to create socket\n");
+        perror("Unable to create socket");
         exit(EXIT_FAILURE);
     }
     inet_aton(host, &socket_address.sin_addr);
@@ -138,6 +138,9 @@ void connect_to_server(char * host)
 
 void run_protocol()
 {
+    printf("Sleeping\n");
+    sleep(4);
+    printf("Awoken\n");
     if (safe_read(REMBASH) ||
         safe_write(SECRET) ||
         safe_read(OK))
