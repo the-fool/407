@@ -1,6 +1,6 @@
-#define _POSIX_C_SOURCE 200809L
-#define _XOPEN_SOURCE 600  // for posix_openpt(), etc.
-#define _GNU_SOURCE
+#define _POSIX_C_SOURCE 200809L // for timers (librt)
+#define _XOPEN_SOURCE 600  // for posix pty things
+#define _GNU_SOURCE // for science
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -39,8 +39,7 @@ int set_nonblocking(int fd);
 int handshake_protocol(int connect_fd);
 int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
-
-int eager_write(int fd, const char * const msg, size_t len);
+int eager_write(int fd, const char * const str, size_t len);
 int relay_bytes(int whence, int whither);
 void sigalrm_handler(int signal, siginfo_t *sip, void *ignore);
 void * io_loop(void *);
@@ -74,7 +73,9 @@ int main()
         perror("epoll creation failed");
         exit(EXIT_FAILURE);
     }
+
     pthread_create(&thread_id, NULL, &io_loop, NULL);
+
     while (1)
     {
 #ifdef DEBUG
@@ -114,6 +115,7 @@ int set_nonblocking(int sfd)
     }
     return 0;
 }
+
 void * io_loop(void * _)
 {
     struct epoll_event evlist[MAX_EVENTS];
@@ -136,7 +138,7 @@ void * io_loop(void * _)
             }
         }
 #ifdef DEBUG
-        printf("Recd %d events\n", nevents);
+        printf("Epoll got %d events\n", nevents);
 #endif
         for (i = 0; i < nevents; i++)
         {
@@ -160,9 +162,9 @@ void * io_loop(void * _)
 
 void * handle_client(void * client_fd_ptr)
 {
-    static char * ptyslave;
-    static struct epoll_event ev[2];
-    static int ptymaster_fd;
+    char * ptyslave;
+    struct epoll_event ev[2];
+    int ptymaster_fd;
 
     int socket_fd = *(int *) client_fd_ptr;
 
@@ -230,6 +232,7 @@ int init_socket()
         perror("setsockopt: TCP_NODELAY");
         return -1;
     }
+
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(PORT);
@@ -240,7 +243,6 @@ int init_socket()
         return -1;
     }
 
-    // create queue
     if (listen(fd, 5) == -1)
     {
         perror("Listen failed\n");
@@ -256,6 +258,8 @@ int relay_bytes(int whence, int whither)
     static char buff[BUFF_MAX];
     static ssize_t nread;
     // does not handle malicious clients!
+    // better would be a rotation through readable files, rather
+    // than staying with a potential hog
     while ((nread = read(whence, buff, BUFF_MAX)) > 0)
     {
         if (eager_write(whither, buff, nread) == -1)
@@ -273,12 +277,13 @@ int relay_bytes(int whence, int whither)
 
 void open_terminal_and_exec_bash(char * ptyslave)
 {
+    int slave_fd;
     if (setsid() == -1)
     {
         perror("setsid failed");
         exit(EXIT_FAILURE);
     }
-    int slave_fd;
+
     if ((slave_fd = open(ptyslave, O_RDWR)) == -1)
     {
         perror("Failed to open slave");
@@ -308,23 +313,21 @@ void sigalrm_handler(int signal, siginfo_t *sip, void *ignore) {
 }
 int handshake_protocol(int fd)
 {
-    static struct sigevent sev;
-    static struct itimerspec timer;
-    static struct sigaction sa;
+    static struct itimerspec timer = {.it_value = {.tv_sec = 3}};
+    static struct sigaction sa = {.sa_flags=SA_SIGINFO};
+    struct sigevent sev = {.sigev_signo=SIGALRM, .sigev_notify=SIGEV_THREAD_ID};
     int alarmed_flag = 0;
+    timer_t timerid;
+
     sa.sa_sigaction = &sigalrm_handler;
-    sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGALRM, &sa, NULL) == -1) {
       perror("Setting up sigaction");
     }
-    sev.sigev_signo = SIGALRM;
-    sev.sigev_notify = SIGEV_THREAD_ID;
+
     sev.sigev_value.sival_ptr = &alarmed_flag;
     sev._sigev_un._tid = syscall(__NR_gettid);
 
-    timer.it_value.tv_sec = 3;
-    timer_t timerid;
     if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
       perror("timer create");
     }
@@ -379,8 +382,8 @@ int safe_read(const int fd, char const * expected)
 
 int eager_write(int fd, const char * const msg, size_t len)
 {
-    static size_t accum = 0;
-    static int nwrote = 0;
+    size_t accum = 0;
+    int nwrote = 0;
 
     do
     {
