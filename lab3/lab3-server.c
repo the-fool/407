@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 199309L
 #define _XOPEN_SOURCE 600  // for posix_openpt(), etc.
 #define _GNU_SOURCE
 
@@ -18,6 +19,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "readline.c"
@@ -193,7 +195,7 @@ void * handle_client(void * client_fd_ptr)
     ev[0].data.fd = socket_fd;
     ev[1].data.fd = ptymaster_fd;
     ev[0].events = EPOLLIN | EPOLLET;
-    ev[1].events = EPOLLIN | EPOLLET; 
+    ev[1].events = EPOLLIN | EPOLLET;
     epoll_ctl(efd, EPOLL_CTL_ADD, socket_fd, ev);
     epoll_ctl(efd, EPOLL_CTL_ADD, ptymaster_fd, ev + 1);
 
@@ -304,6 +306,18 @@ void open_terminal_and_exec_bash(char * ptyslave)
 
 int handshake_protocol(int fd)
 {
+    static struct sigevent sev;
+    static struct itimerspec timer;
+    timer.it_value.tv_nsec = 2000000000; // 2 seconds in nanoseconds
+    timer_t timerid;
+
+    sev.sigev_signo = SIGALRM;
+    sev.sigev_notify = SIGEV_THREAD_ID;
+    sev.sigev_value.sival_ptr = &timerid;
+    sev._sigev_un._tid = pthread_self();
+
+    timer_create(CLOCK_REALTIME, &sev, &timerid);
+    timer_settime(timerid, 0, &timer, NULL);
     if (safe_write(fd, REMBASH) ||
         safe_read(fd, SECRET) ||
         safe_write(fd, OK))
@@ -312,6 +326,7 @@ int handshake_protocol(int fd)
     }
     else
     {
+        timer_delete(timerid);
         return 0;
     }
 }
