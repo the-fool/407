@@ -39,7 +39,6 @@ int set_nonblocking(int fd);
 int handshake_protocol(int connect_fd);
 int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
-int sigchld_to_sig_ign();
 
 int eager_write(int fd, const char * const msg, size_t len);
 int relay_bytes(int whence, int whither);
@@ -64,7 +63,11 @@ int main()
         exit(EXIT_FAILURE);
     }
     // Ignore exited children
-    sigchld_to_sig_ign();
+    if (signal(SIGCHLD, SIG_IGN) == SIG_ERR)
+    {
+        perror("Failed to set SIGCHLD to SIG_IGN");
+        exit(EXIT_FAILURE);
+    }
 
     if ((efd = epoll_create1(EPOLL_CLOEXEC)) == -1)
     {
@@ -132,9 +135,9 @@ void * io_loop(void * _)
                 exit(EXIT_FAILURE);
             }
         }
-        #ifdef DEBUG
+#ifdef DEBUG
         printf("Recd %d events\n", nevents);
-        #endif
+#endif
         for (i = 0; i < nevents; i++)
         {
             if (evlist[i].events & EPOLLIN)
@@ -145,9 +148,9 @@ void * io_loop(void * _)
             }
             else if (evlist[i].events & (EPOLLHUP | EPOLLERR))
             {
-              #ifdef DEBUG
+#ifdef DEBUG
                 printf("Recd EPOLLHUP or EPOLLERR on %d -- closing it and %d\n", evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]);
-              #endif
+#endif
                 close(client_fd_pairs[evlist[i].data.fd]);
                 close(evlist[i].data.fd);
             }
@@ -164,7 +167,6 @@ void * handle_client(void * client_fd_ptr)
     int socket_fd = *(int *) client_fd_ptr;
 
     free(client_fd_ptr);
-
 
     if (handshake_protocol(socket_fd))
     {
@@ -253,10 +255,6 @@ int relay_bytes(int whence, int whither)
 {
     static char buff[BUFF_MAX];
     static ssize_t nread;
-
-    #ifdef DEBUG
-    printf("Relaying from %d to %d\n", whence, whither);
-    #endif
     // does not handle malicious clients!
     while ((nread = read(whence, buff, BUFF_MAX)) > 0)
     {
@@ -269,17 +267,6 @@ int relay_bytes(int whence, int whither)
     if (nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
       perror("Error reading");
       return -1;
-    }
-    return 0;
-}
-
-
-int sigchld_to_sig_ign()
-{
-    if (signal(SIGCHLD, SIG_IGN) == SIG_ERR)
-    {
-        perror("Failed to set SIGCHLD to SIG_IGN");
-        return -1;
     }
     return 0;
 }
@@ -311,9 +298,9 @@ void open_terminal_and_exec_bash(char * ptyslave)
 
 void sigalrm_handler(int signal, siginfo_t *sip, void *ignore) {
 
-  #ifdef DEBUG
+#ifdef DEBUG
   printf("caught alarm, with value: %d\n", *(int *)(sip->si_ptr));
-  #endif
+#endif
   // set the flag to flown, which will be used in the handshake routine
   // to determine failure.
   // Most likely, though, a blocked read() call will get errored with EINTR
@@ -335,6 +322,7 @@ int handshake_protocol(int fd)
     sev.sigev_notify = SIGEV_THREAD_ID;
     sev.sigev_value.sival_ptr = &alarmed_flag;
     sev._sigev_un._tid = syscall(__NR_gettid);
+
     timer.it_value.tv_sec = 3;
     timer_t timerid;
     if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
@@ -351,6 +339,10 @@ int handshake_protocol(int fd)
     }
     else
     {
+        if (signal(SIGALRM, SIG_IGN) == SIG_ERR) {
+          perror("setting sigalrm to sig_ign -- continuing");
+          // so what?  moving right along . . .
+        }
         timer_delete(timerid);
         return 0;
     }
@@ -358,7 +350,7 @@ int handshake_protocol(int fd)
 
 int safe_write(const int fd, char const * str)
 {
-    if (write(fd, str, strlen(str)) == -1)
+    if (eager_write(fd, str, strlen(str)) == -1)
     {
         perror("Failed to write");
         return 1;
