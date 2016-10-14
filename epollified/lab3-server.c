@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L // for timers (librt)
-#define _XOPEN_SOURCE 600  // for posix pty things
-#define _GNU_SOURCE // for science
+#define _XOPEN_SOURCE   600 // for posix pty things
+#define _GNU_SOURCE     // for science
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -42,10 +42,9 @@ int safe_read(const int fd, char const * expected);
 int eager_write(int fd, const char * const str, size_t len);
 int relay_bytes(int whence, int whither);
 int close_paired_fds(int fd);
-void sigalrm_handler(int signal, siginfo_t *sip, void *ignore);
+void sigalrm_handler(int signal, siginfo_t * sip, void * ignore);
 void * io_loop(void *);
 void * handle_client(void * client_fd_ptr);
-void debug(int fd);
 void open_terminal_and_exec_bash(char * ptyslave);
 
 // epoll instance
@@ -60,6 +59,9 @@ int client_fd_pairs[MAX_CLIENTS * 2 + 5];
 // holds the PID of the exec'd process associated with the socket
 pid_t subprocess_by_fd[MAX_CLIENTS * 2 + 5];
 
+
+// Initialize resources and go into an accept() loop
+// Each client is given a new thread -- which is inefficient
 int main()
 {
     int server_socket_fd;
@@ -110,22 +112,27 @@ int main()
     }
 }
 
-int set_nonblocking(int sfd)
+// General purpose non-blockifier for file-descriptors
+int set_nonblocking(int fd)
 {
     int flags;
 
-    if ((flags = fcntl(sfd, F_GETFL, 0)) == -1) {
-      perror("fcntl get flags");
-      return -1;
+    if ((flags = fcntl(fd, F_GETFL, 0)) == -1)
+    {
+        perror("fcntl get flags");
+        return -1;
     }
     flags |= O_NONBLOCK;
-    if (fcntl(sfd, F_SETFL, flags) == -1) {
-      perror("fcntl set flags");
-      return -1;
+    if (fcntl(fd, F_SETFL, flags) == -1)
+    {
+        perror("fcntl set flags");
+        return -1;
     }
     return 0;
 }
 
+// This is the epoll loop
+// it waits, and then decides whether to relay data or close down a pair of resources
 void * io_loop(void * _)
 {
     struct epoll_event evlist[MAX_EVENTS];
@@ -154,13 +161,14 @@ void * io_loop(void * _)
         {
             if (evlist[i].events & EPOLLIN)
             {
-                if (relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd])) {
+                if (relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]))
+                {
 #ifdef DEBUG
-                  printf("Unexpected IO error with client -- closing connection and terminating bash\n");
+                    printf("Unexpected IO error with client -- closing connection and terminating bash\n");
 #endif
-                  // kill bash subprocess
-                  kill(subprocess_by_fd[evlist[i].data.fd], SIGTERM);
-                  close_paired_fds(evlist[i].data.fd);
+                    // kill bash subprocess
+                    kill(subprocess_by_fd[evlist[i].data.fd], SIGTERM);
+                    close_paired_fds(evlist[i].data.fd);
                 }
             }
             else if (evlist[i].events & (EPOLLHUP | EPOLLERR))
@@ -174,10 +182,12 @@ void * io_loop(void * _)
     }
 }
 
-int close_paired_fds(int fd) {
-  return close(fd) || close(client_fd_pairs[fd]);
+int close_paired_fds(int fd)
+{
+    return close(fd) || close(client_fd_pairs[fd]);
 }
 
+// Protocol handshake, setup of PTY, store client description in global register, fork
 void * handle_client(void * client_fd_ptr)
 {
     char * ptyslave;
@@ -217,6 +227,9 @@ void * handle_client(void * client_fd_ptr)
             open_terminal_and_exec_bash(ptyslave);
             exit(EXIT_FAILURE);
     }
+
+    // Special global registers for client description
+    // The subprocess PID is redundant so that it can be found based on either socket or pty
     client_fd_pairs[socket_fd] = ptymaster_fd;
     client_fd_pairs[ptymaster_fd] = socket_fd;
     subprocess_by_fd[socket_fd] = subproc;
@@ -278,9 +291,10 @@ int relay_bytes(int whence, int whither)
 {
     static char buff[BUFF_MAX];
     static ssize_t nread;
+
     // does not handle malicious clients!
     // better would be a rotation through readable files, rather
-    // than staying with a potential hog
+    // than being patient with a greedy client
     while ((nread = read(whence, buff, BUFF_MAX)) > 0)
     {
         if (eager_write(whither, buff, nread) == -1)
@@ -289,9 +303,10 @@ int relay_bytes(int whence, int whither)
             break;
         }
     }
-    if (nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-      perror("Error reading");
-      return -1;
+    if (nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN)
+    {
+        perror("Error reading");
+        return -1;
     }
     return 0;
 }
@@ -299,6 +314,7 @@ int relay_bytes(int whence, int whither)
 void open_terminal_and_exec_bash(char * ptyslave)
 {
     int slave_fd;
+
     if (setsid() == -1)
     {
         perror("setsid failed");
@@ -322,54 +338,62 @@ void open_terminal_and_exec_bash(char * ptyslave)
     exit(EXIT_FAILURE);
 }
 
-void sigalrm_handler(int signal, siginfo_t *sip, void *ignore) {
+void sigalrm_handler(int signal, siginfo_t * sip, void * ignore)
+{
 
 #ifdef DEBUG
-  printf("caught alarm, with value: %d\n", *(int *)(sip->si_ptr));
+    printf("caught alarm, with value: %d\n", *(int *) (sip->si_ptr));
 #endif
-  // set the flag to flown, which will be used in the handshake routine
-  // to determine failure.
-  // Most likely, though, a blocked read() call will get errored with EINTR
-  *(int*)sip->si_ptr = 1;
+    // set the flag to flown, which will be used in the handshake routine
+    // to determine failure.
+    // Most likely, though, the alarm will cause a blocked read() call to be errored with EINTR
+    *(int *) sip->si_ptr = 1;
 }
 int handshake_protocol(int fd)
 {
-    static struct itimerspec timer = {.it_value = {.tv_sec = 3}};
-    static struct sigaction sa = {.sa_flags=SA_SIGINFO};
-    struct sigevent sev = {.sigev_signo=SIGALRM, .sigev_notify=SIGEV_THREAD_ID};
+    static struct itimerspec timer = { .it_value = { .tv_sec = 3 } };
+    static struct sigaction sa = { .sa_flags = SA_SIGINFO };
+    struct sigevent sev = { .sigev_signo = SIGALRM, .sigev_notify = SIGEV_THREAD_ID };
     int alarmed_flag = 0;
     timer_t timerid;
 
     sa.sa_sigaction = &sigalrm_handler;
     sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGALRM, &sa, NULL) == -1) {
-      perror("Setting up sigaction");
+    if (sigaction(SIGALRM, &sa, NULL) == -1)
+    {
+        perror("Setting up sigaction");
     }
 
     sev.sigev_value.sival_ptr = &alarmed_flag;
     sev._sigev_un._tid = syscall(__NR_gettid);
 
-    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
-      perror("timer create");
+    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1)
+    {
+        perror("timer create");
     }
-    if (timer_settime(timerid, 0, &timer, NULL) == -1) {
-      perror("settime");
+    if (timer_settime(timerid, 0, &timer, NULL) == -1)
+    {
+        perror("settime");
     }
+    // alarmed_flag is set in the sigalrm handler
+    // it is checked before every stage of the handshake to avoid race conditions
     if (alarmed_flag || safe_write(fd, REMBASH) ||
         alarmed_flag || safe_read(fd, SECRET) ||
         alarmed_flag || safe_write(fd, OK))
     {
         return 1;
     }
-    else
+
+    if (signal(SIGALRM, SIG_IGN) == SIG_ERR)
     {
-        if (signal(SIGALRM, SIG_IGN) == SIG_ERR) {
-          perror("setting sigalrm to sig_ign -- continuing");
-          // so what?  moving right along . . .
-        }
-        timer_delete(timerid);
-        return 0;
+        perror("setting sigalrm to sig_ign -- continuing");
     }
+    if (timer_delete(timerid) == -1)
+    {
+        perror("timer_delete");
+    }
+    // Success
+    return 0;
 }
 
 int safe_write(const int fd, char const * str)
