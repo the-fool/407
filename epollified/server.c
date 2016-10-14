@@ -41,14 +41,24 @@ int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
 int eager_write(int fd, const char * const str, size_t len);
 int relay_bytes(int whence, int whither);
+int close_paired_fds(int fd);
 void sigalrm_handler(int signal, siginfo_t *sip, void *ignore);
 void * io_loop(void *);
 void * handle_client(void * client_fd_ptr);
 void debug(int fd);
 void open_terminal_and_exec_bash(char * ptyslave);
 
+// epoll instance
 int efd;
+
+// Kind of like a hash, or list of tuples
+// At index i, the value is the associated FD for FD i (pty || socket)
 int client_fd_pairs[MAX_CLIENTS * 2 + 5];
+
+// Same idea -- map the exec'd subprocces PID to the FDs that relate to it
+// If there is a socket connection at FD 15, then the 15th spot in this array
+// holds the PID of the exec'd process associated with the socket
+pid_t subprocess_by_fd[MAX_CLIENTS * 2 + 5];
 
 int main()
 {
@@ -145,7 +155,12 @@ void * io_loop(void * _)
             if (evlist[i].events & EPOLLIN)
             {
                 if (relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd])) {
-                  // TODO -- kill bash subprocess
+#ifdef DEBUG
+                  printf("Unexpected IO error with client -- closing connection and terminating bash\n");
+#endif
+                  // kill bash subprocess
+                  kill(subprocess_by_fd[evlist[i].data.fd], SIGTERM);
+                  close_paired_fds(evlist[i].data.fd);
                 }
             }
             else if (evlist[i].events & (EPOLLHUP | EPOLLERR))
@@ -153,11 +168,14 @@ void * io_loop(void * _)
 #ifdef DEBUG
                 printf("Recd EPOLLHUP or EPOLLERR on %d -- closing it and %d\n", evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]);
 #endif
-                close(client_fd_pairs[evlist[i].data.fd]);
-                close(evlist[i].data.fd);
+                close_paired_fds(evlist[i].data.fd);
             }
         }
     }
+}
+
+int close_paired_fds(int fd) {
+  return close(fd) || close(client_fd_pairs[fd]);
 }
 
 void * handle_client(void * client_fd_ptr)
@@ -165,6 +183,7 @@ void * handle_client(void * client_fd_ptr)
     char * ptyslave;
     struct epoll_event ev[2];
     int ptymaster_fd;
+    pid_t subproc;
 
     int socket_fd = *(int *) client_fd_ptr;
 
@@ -188,7 +207,7 @@ void * handle_client(void * client_fd_ptr)
     ptyslave = (char *) malloc(1024); // malloc first, to avoid race condition
     strcpy(ptyslave, ptsname(ptymaster_fd));
 
-    switch (fork())
+    switch (subproc = fork())
     {
         case -1:
             perror("fork failed");
@@ -200,6 +219,8 @@ void * handle_client(void * client_fd_ptr)
     }
     client_fd_pairs[socket_fd] = ptymaster_fd;
     client_fd_pairs[ptymaster_fd] = socket_fd;
+    subprocess_by_fd[socket_fd] = subproc;
+    subprocess_by_fd[ptymaster_fd] = subproc;
 
     ev[0].data.fd = socket_fd;
     ev[1].data.fd = ptymaster_fd;
