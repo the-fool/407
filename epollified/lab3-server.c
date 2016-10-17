@@ -197,8 +197,10 @@ void * handle_client(void * client_fd_ptr)
 
     int socket_fd = *(int *) client_fd_ptr;
 
+    // clear up memory
     free(client_fd_ptr);
-
+    pthread_detach(pthread_self());
+    
     if (handshake_protocol(socket_fd))
     {
         perror("Client failed protocol exchange");
