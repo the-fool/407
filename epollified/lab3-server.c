@@ -227,7 +227,7 @@ void * handle_client(void * client_fd_ptr)
             open_terminal_and_exec_bash(ptyslave);
             exit(EXIT_FAILURE);
     }
-
+    free(ptyslave);
     // Special global registers for client description
     // The subprocess PID is redundant so that it can be found based on either socket or pty
     client_fd_pairs[socket_fd] = ptymaster_fd;
@@ -326,6 +326,7 @@ void open_terminal_and_exec_bash(char * ptyslave)
         perror("Failed to open slave");
         exit(EXIT_FAILURE);
     }
+    free(ptyslave);
     if ((dup2(slave_fd, STDIN_FILENO) == -1)
         || (dup2(slave_fd, STDOUT_FILENO) == -1)
         || (dup2(slave_fd, STDERR_FILENO) == -1))
