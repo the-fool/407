@@ -354,19 +354,21 @@ void sigalrm_handler(int signal, siginfo_t * sip, void * ignore)
 }
 int handshake_protocol(int fd)
 {
+    // 3 second timer
     static struct itimerspec timer = { .it_value = { .tv_sec = 3 } };
-    static struct sigaction sa = { .sa_flags = SA_SIGINFO };
+    struct sigaction sa = { .sa_flags = SA_SIGINFO, .sa_sigaction = &sigalrm_handler };
     struct sigevent sev = { .sigev_signo = SIGALRM, .sigev_notify = SIGEV_THREAD_ID };
     int alarmed_flag = 0;
     timer_t timerid;
-
-    sa.sa_sigaction = &sigalrm_handler;
+    
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGALRM, &sa, NULL) == -1)
     {
         perror("Setting up sigaction");
     }
-
+    
+    // Setup sigevent to contain our alarmed_flag for data,
+    // and to be thread-specific
     sev.sigev_value.sival_ptr = &alarmed_flag;
     sev._sigev_un._tid = syscall(__NR_gettid);
 
