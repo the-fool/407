@@ -157,14 +157,14 @@ void handle_io()
     if (sigaction(SIGCHLD, &sa, 0) == -1)
     {
         perror("Unable to setup sigaction");
-        exit(EXIT_FAILURE);
+        return;
     }
 
     switch (child_pid = fork())
     {
         case -1:
             perror("fork failed");
-            exit(EXIT_FAILURE);
+            return;
         case 0:
             read_terminal_write_socket();
             exit(EXIT_FAILURE);
