@@ -63,7 +63,6 @@ int main(int argc, char ** argv)
     if (close(SERVER_FD) == -1)
     {
         perror("Failed to close socket");
-        exit(EXIT_FAILURE);
     }
     reset_termios_attrs(&stashed_termios_attr);
     exit(errno);
