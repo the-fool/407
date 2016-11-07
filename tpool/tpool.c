@@ -22,7 +22,7 @@ typedef struct tpool_ {
 
 static int task_queue_init();
 
-
+// Global scope & lifetime, per the lab specification
 static tpool_ tpool;
 static task_queue queue;
 
