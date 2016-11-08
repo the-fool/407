@@ -33,7 +33,7 @@ typedef struct tpool_ {
   thread** threads;
   int num_threads;
   void (*subroutine)(int);
-  task_queue queue;
+  task_queue* queue;
 } tpool_;
 
 static void* thread_loop(void* thread);
@@ -56,7 +56,8 @@ static task_queue queue;
 
 int tpool_init(void (*do_task)(int)) {
 
-  tpool.num_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+  //tpool.num_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+  tpool.num_threads = 4;
   tpool.subroutine = do_task;
 
   if (task_queue_init() != 0) {
@@ -87,14 +88,14 @@ int tpool_init(void (*do_task)(int)) {
 
 int tpool_add_task(int task) {
   int ret;
-  pthread_mutex_lock(&tpool.queue.lock);
-  ret = push_task(&tpool.queue, task);
-  pthread_mutex_unlock(&tpool.queue.lock);
+  pthread_mutex_lock(&tpool.queue->lock);
+  ret = push_task(tpool.queue, task);
+  pthread_mutex_unlock(&tpool.queue->lock);
   return ret;
 }
 
 static int thread_init(thread** threadpp, int ord) {
-  *threadpp = (thread*) malloc(sizeof(thread));
+  *threadpp = (thread*) malloc(sizeof(struct thread));
   if (threadpp == NULL) {
     perror("thread_init(): Failed to allocate memory for thread");
     return -1;
@@ -110,23 +111,29 @@ static void* thread_loop(void* _thread) {
   int task;
   thread* thread;
   thread = (struct thread*) _thread;
-
+  sleep(1);
   for(;;) {
-    bin_sem_wait(tpool.queue.has_task);
-    pthread_mutex_lock(&tpool.queue.lock);
-    task = pop_task(&tpool.queue);
+    bin_sem_wait(tpool.queue->has_task);
+    pthread_mutex_lock(&tpool.queue->lock);
+    task = pop_task(tpool.queue);
   #if DEBUG
-    printf("Worker %c: got %d\n", thread->id, task);
+    printf("Worker %c: got %d :: ", thread->id, task);
+    print_queue(tpool.queue);
   #endif
-    pthread_mutex_unlock(&tpool.queue.lock);
+    pthread_mutex_unlock(&tpool.queue->lock);
 
     tpool.subroutine(task);
+  #if DEBUG
+    printf("Worker %c: finished %d\n", thread->id, task);
+
+  #endif
   }
+  return NULL;
 }
 
 static int task_queue_init() {
   size_t init_len = 4;
-  tpool.queue = queue;
+  tpool.queue = &queue;
   queue.buffer = (int *) malloc(init_len * sizeof(int));
   if (queue.buffer == NULL) {
     perror("task_queue_init(): Failed to allocate memory for queue buffer");
@@ -154,7 +161,7 @@ static int push_task(task_queue* q, int task) {
   q->buffer[q->tail] = task;
   q->tail = (q->tail + 1) % q->len;
   #if DEBUG
-    printf("Q got task %d -- ", task);
+    printf("Q got task %d :: ", task);
     print_queue(q);
   #endif
   bin_sem_post(q->has_task);
@@ -191,6 +198,7 @@ static int pop_task(task_queue* q) {
 }
 
 static int is_queue_full(task_queue* q) {
+  // printf("q-full -- len: %lu  h: %d  t: %d\n", q->len, q->head, q->tail);
   return ((q->tail + 1) % (int)q->len) == q->head;
 }
 
@@ -203,10 +211,10 @@ static int is_queue_empty(task_queue* q) {
     int i = 0;
     printf(" [ ");
     while (i < (int)q->len) {
-      if ((i < q->tail) || (i >= q->head))
+      if ((i < q->tail) && (i >= q->head))
         printf(" %d ", q->buffer[i]);
       else
-        printf(" x ");
+        printf(" - ");
       i++;
     }
     printf(" ] \n");
