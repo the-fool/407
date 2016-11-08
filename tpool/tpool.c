@@ -16,7 +16,7 @@ typedef struct bin_sem {
 } bin_sem;
 
 typedef struct thread {
-  char id;
+  char id; // human readable
   pthread_t pthread_id;
 } thread;
 
