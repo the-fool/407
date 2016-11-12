@@ -21,8 +21,8 @@ typedef struct thread {
 } thread;
 
 typedef struct task_queue {
-  pthread_mutex_t lock;
-  bin_sem* has_task;
+  pthread_mutex_t lock;  // lock for read-write actions on queue
+  bin_sem* has_task; // condition for presence of tasks on queue
   size_t len;
   int head;
   int tail;
@@ -74,7 +74,7 @@ int tpool_init(void (*do_task)(int)) {
   int i = 0;
   do {
     if (thread_init(&(tpool.threads[i]), i)) {
-      fprintf(stderr, "Error\n");
+      fprintf(stderr, "Error creating thread -- aborting\n");
       return -1;
     }
     #if DEBUG
@@ -83,7 +83,7 @@ int tpool_init(void (*do_task)(int)) {
   } while (++i < tpool.num_threads);
 
 
-  return 0;
+  return 0; // success
 }
 
 int tpool_add_task(int task) {

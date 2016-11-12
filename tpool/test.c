@@ -11,7 +11,10 @@ void work(int task) {
 }
 
 int main(int argc, char** argv) {
-  tpool_init(work);
+  if (tpool_init(work)) {
+    fprintf(stderr, "Failed creating pool -- aborting\n");
+    exit(EXIT_FAILURE);
+  }
   srand(time(NULL));
   int i = 0;
   while (i++ < 40) {
@@ -19,7 +22,10 @@ int main(int argc, char** argv) {
      usleep(3100ULL);
     }
     printf("MAIN adding %d\n", i);
-    tpool_add_task(i);
+    if (tpool_add_task(i)) {
+      fprintf(stderr, "Failed adding task to pool\n");
+    }
   }
   sleep(1);
+  return EXIT_SUCCESS;
 }
