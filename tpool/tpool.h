@@ -1,7 +1,7 @@
 #ifndef _RUBLE_POOL_
 #define _RUBLE_POOL_
 
-typedef struct tpool_* coolpool;
+typedef struct tpool_* tpool_p;
 
 int tpool_init(void (*do_task)(int));
 

@@ -109,11 +109,14 @@ static int thread_init(thread** threadpp, int ord) {
 
 static void* thread_loop(void* _thread) {
   int task;
+
   thread* thread;
   thread = (struct thread*) _thread;
-  sleep(1);
   for(;;) {
+    // Wait for the queue to be non-empty
     bin_sem_wait(tpool.queue->has_task);
+    printf("Worker %c attempting lock -- queue flag at %d\n", thread->id, tpool.queue->has_task->flag);
+    // Lock queue to pop a single task
     pthread_mutex_lock(&tpool.queue->lock);
     task = pop_task(tpool.queue);
   #if DEBUG
@@ -125,7 +128,6 @@ static void* thread_loop(void* _thread) {
     tpool.subroutine(task);
   #if DEBUG
     printf("Worker %c: finished %d\n", thread->id, task);
-
   #endif
   }
   return NULL;
@@ -155,6 +157,7 @@ static int task_queue_init() {
 
 static int push_task(task_queue* q, int task) {
   if (is_queue_full(q) && enlarge_queue(q)) {
+    printf("Enlarge queue failed\n");
     return -1;
   }
 
@@ -171,11 +174,19 @@ static int push_task(task_queue* q, int task) {
 
 static int enlarge_queue(task_queue* q) {
   size_t new_len = q->len * 2;
-
-  q->buffer = (int *) realloc(q->buffer, new_len);
+  printf("new length: %lu\n", new_len);
+  q->buffer = (int *) realloc(q->buffer, new_len * sizeof(int));
   if (q->buffer == NULL) {
     perror("enlarge_queue(): Failed to realloc for new buffer");
     return -1;
+  }
+  if (q->head > q->tail) {
+    int i = 1;
+    while (i < ((int)q->len - q->head)) {
+      q->buffer[new_len - i] = q->buffer[q->len - i];
+      i++;
+    }
+    q->head = new_len - i;
   }
   q->len = new_len;
 
@@ -191,7 +202,7 @@ static int pop_task(task_queue* q) {
   assert(q->head - q->tail);
 
   int ret = q->buffer[q->head];
-  q->head = (q->head == (int)q->len - 1) ? 0 : q->head + 1;
+  q->head = (q->head  + 1) % q->len;
   if (!is_queue_empty(q))
     bin_sem_post(q->has_task);
   return ret;
@@ -203,7 +214,7 @@ static int is_queue_full(task_queue* q) {
 }
 
 static int is_queue_empty(task_queue* q) {
-  return !(q->tail - q->head);
+  return q->tail == q->head;
 }
 
 #if DEBUG
@@ -211,7 +222,8 @@ static int is_queue_empty(task_queue* q) {
     int i = 0;
     printf(" [ ");
     while (i < (int)q->len) {
-      if ((i < q->tail) && (i >= q->head))
+      if (((q->tail > q->head) && (i < q->tail) && (i >= q->head)) ||
+          ((q->tail < q->head) && ((i < q->tail) || (i >= q->head))))
         printf(" %d ", q->buffer[i]);
       else
         printf(" - ");
@@ -233,17 +245,18 @@ static void bin_sem_init(bin_sem* sem) {
 }
 
 static void bin_sem_post(bin_sem* sem) {
-  pthread_mutex_lock(&(sem->mutex));
+  pthread_mutex_lock(&sem->mutex);
   sem->flag = 1;
-  pthread_cond_signal(&(sem->condition));
-  pthread_mutex_unlock(&(sem->mutex));
+  pthread_cond_signal(&sem->condition);
+  pthread_mutex_unlock(&sem->mutex);
 }
 
 static void bin_sem_wait(bin_sem* sem) {
 	pthread_mutex_lock(&sem->mutex);
-	while (sem->flag != 1) {
+	while (sem->flag != 0) {
 		pthread_cond_wait(&sem->condition, &sem->mutex);
 	}
 	sem->flag = 0;
+  printf("In bsem wait: %d\n", sem->flag);
 	pthread_mutex_unlock(&sem->mutex);
 }
