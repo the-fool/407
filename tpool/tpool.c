@@ -95,7 +95,7 @@ int tpool_add_task(int task) {
 }
 
 static int thread_init(thread** threadpp, int ord) {
-  *threadpp = (thread*) malloc(sizeof(struct thread));
+  *threadpp = (thread*) malloc(sizeof(thread));
   if (threadpp == NULL) {
     perror("thread_init(): Failed to allocate memory for thread");
     return -1;
@@ -110,8 +110,8 @@ static int thread_init(thread** threadpp, int ord) {
 static void* thread_loop(void* _thread) {
   int task;
 
-  thread* thread;
-  thread = (struct thread*) _thread;
+  thread* td;
+  td = (thread*) _thread;
   for(;;) {
     // Wait for the queue to be non-empty
     bin_sem_wait(tpool.queue->has_task);
@@ -119,14 +119,14 @@ static void* thread_loop(void* _thread) {
     pthread_mutex_lock(&tpool.queue->lock);
     task = pop_task(tpool.queue);
     #if DEBUG
-      printf("Worker %c: got %d\n", thread->id, task);
+      printf("Worker %c: got %d\n", td->id, task);
       print_queue(tpool.queue);
     #endif
     pthread_mutex_unlock(&tpool.queue->lock);
 
     tpool.subroutine(task);
   #if DEBUG
-    printf("Worker %c: finished %d\n", thread->id, task);
+    printf("Worker %c: finished %d\n", td->id, task);
   #endif
   }
   return NULL;
