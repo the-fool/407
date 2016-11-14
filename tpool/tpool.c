@@ -9,11 +9,11 @@
 
 #define DEBUG 1
 
-typedef struct bin_sem {
+typedef struct sem {
   pthread_mutex_t mutex;
   pthread_cond_t condition;
   int flag;
-} bin_sem;
+} sem;
 
 typedef struct thread {
   char id; // human readable
@@ -22,7 +22,7 @@ typedef struct thread {
 
 typedef struct task_queue {
   pthread_mutex_t lock;  // lock for read-write actions on queue
-  bin_sem* has_task; // condition for presence of tasks on queue
+  sem* has_task; // condition for presence of tasks on queue
   size_t len;
   int head;
   int tail;
@@ -45,10 +45,10 @@ static int pop_task(task_queue* q);
 static int is_queue_full(task_queue* q);
 static int enlarge_queue(task_queue* q);
 static void print_queue(task_queue* q);
-static void bin_sem_init(bin_sem* bin_sem);
-static void bin_sem_post(bin_sem* sem);
-static void bin_sem_wait(bin_sem* sem);
-static void bin_sem_probe(bin_sem* sem);
+static void sem_init(sem* sem);
+static void sem_post(sem* sem);
+static void sem_wait(sem* sem);
+static void sem_probe(sem* sem);
 
 // Global scope & lifetime, per the lab specification
 static tpool_t tpool;
@@ -115,7 +115,7 @@ static void* thread_loop(void* _thread) {
   td = (thread*) _thread;
   for(;;) {
     // Wait for the queue to be non-empty
-    bin_sem_wait(tpool.queue->has_task);
+    sem_wait(tpool.queue->has_task);
     // Lock queue to pop a single task
     pthread_mutex_lock(&tpool.queue->lock);
     task = pop_task(tpool.queue);
@@ -141,9 +141,9 @@ static int task_queue_init() {
     perror("task_queue_init(): Failed to allocate memory for queue buffer");
     return -1;
   }
-  queue.has_task = (bin_sem*) malloc(sizeof(bin_sem));
+  queue.has_task = (sem*) malloc(sizeof(sem));
   if (queue.has_task == NULL) {
-    perror("task_queue_init(): Failed to allocate memory for bin_sem");
+    perror("task_queue_init(): Failed to allocate memory for sem");
     return -1;
   }
   queue.len = init_len;
@@ -151,7 +151,7 @@ static int task_queue_init() {
   queue.tail = 0;
 
   pthread_mutex_init(&queue.lock, NULL);
-  bin_sem_init(queue.has_task);
+  sem_init(queue.has_task);
   return 0;
 }
 
@@ -166,7 +166,7 @@ static int push_task(task_queue* q, int task) {
   #if DEBUG
     printf("Q got %d \n", task);
   #endif
-  bin_sem_post(q->has_task);
+  sem_post(q->has_task);
 
   return 0; // success
 }
@@ -204,7 +204,7 @@ static int pop_task(task_queue* q) {
 
   int ret = q->buffer[q->head];
   q->head = (q->head  + 1) % q->len;
-  bin_sem_probe(q->has_task);
+  sem_probe(q->has_task);
   return ret;
 }
 
@@ -234,27 +234,27 @@ static int is_queue_full(task_queue* q) {
 // --  Convenient semaphore wrappers -- //
 
 
-static void bin_sem_init(bin_sem* sem) {
+static void sem_init(sem* sem) {
   pthread_mutex_init(&(sem->mutex), NULL);
   pthread_cond_init(&(sem->condition), NULL);
   sem->flag = 0;
 }
 
-static void bin_sem_post(bin_sem* sem) {
+static void sem_post(sem* sem) {
   pthread_mutex_lock(&sem->mutex);
   sem->flag += 1;
   pthread_cond_signal(&sem->condition);
   pthread_mutex_unlock(&sem->mutex);
 }
 
-static void bin_sem_probe(bin_sem* sem) {
+static void sem_probe(sem* sem) {
   pthread_mutex_lock(&sem->mutex);
   if (sem->flag != 0)
     pthread_cond_signal(&sem->condition);
   pthread_mutex_unlock(&sem->mutex);
 }
 
-static void bin_sem_wait(bin_sem* sem) {
+static void sem_wait(sem* sem) {
 	pthread_mutex_lock(&sem->mutex);
 	while (sem->flag == 0) {
 		pthread_cond_wait(&sem->condition, &sem->mutex);
