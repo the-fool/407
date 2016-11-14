@@ -52,12 +52,13 @@ static void bin_sem_probe(bin_sem* sem);
 
 // Global scope & lifetime, per the lab specification
 static tpool_t tpool;
+// If the pool is global, might as well do the same with the queue!
 static task_queue queue;
 
 int tpool_init(void (*do_task)(int)) {
 
-  //tpool.num_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
-  tpool.num_threads = 4;
+  tpool.num_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+  //tpool.num_threads = 4;
   tpool.subroutine = do_task;
 
   if (task_queue_init() != 0) {

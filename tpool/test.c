@@ -7,7 +7,7 @@
 
 void work(int task) {
   printf("working on %d\n", task);
-  usleep(13000ULL * rand() / RAND_MAX);
+  usleep(13000ULL * (int)sysconf(_SC_NPROCESSORS_ONLN) / 4 * rand() / RAND_MAX);
 }
 
 int main(int argc, char** argv) {
