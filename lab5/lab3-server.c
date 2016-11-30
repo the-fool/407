@@ -27,7 +27,6 @@
 #include "tpool.h"
 
 #define BUFF_MAX    4 * 1024
-#define MAX_EVENTS  16
 #define MAX_CLIENTS 64 * 1000
 #define PORT        4070
 #define SECRET      "<cs407rembash>\n"
@@ -42,14 +41,14 @@ int setup_pty(int * masterfd_p, char ** slavename_p);
 int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
 int eager_write(int fd, const char * const str, size_t len);
-int relay_bytes(int whence, int whither);
-int close_paired_fds(int fd);
+void relay_bytes(int whence);
+void destroy_client(int fd);
 void sigalrm_handler(int signal, siginfo_t * sip, void * ignore);
 void * epoll_loop(void *);
 void * handle_client(void * client_fd_ptr);
 int register_client(int socket, int pty);
 void open_terminal_and_exec_bash(char * ptyslave);
-void relay_data(int whence);
+
 // epoll instance
 int efd;
 
@@ -72,7 +71,7 @@ int main()
     int * client_fd_ptr;
     pthread_t thread_id;
 
-    tpool_init(relay_data);
+    tpool_init(relay_bytes);
 
     if ((server_listen_fd = init_socket()) == -1)
     {
@@ -134,14 +133,14 @@ int main()
 // it waits, and then decides whether to relay data or close down a pair of resources
 void * epoll_loop(void * _)
 {
-    struct epoll_event evlist[MAX_EVENTS];
+    struct epoll_event evlist[MAX_CLIENTS * 2];
     int nevents;
     int i;
 
     while (1)
     {
-        nevents = epoll_wait(efd, evlist, MAX_EVENTS, -1);
-        if (nevents == -1)
+        nevents = epoll_wait(efd, evlist, MAX_CLIENTS * 2, -1);
+        if (nevents < 0)
         {
             if (errno == EINTR)
             {
@@ -153,37 +152,33 @@ void * epoll_loop(void * _)
                 exit(EXIT_FAILURE);
             }
         }
-#ifdef DEBUG
-        printf("Epoll got %d events\n", nevents);
-#endif
-        for (i = 0; i < nevents; i++)
+        else
         {
-            if (evlist[i].events & EPOLLIN)
+            for (i = 0; i < nevents; i++)
             {
-                if (relay_bytes(evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]))
+                if (evlist[i].events & EPOLLIN)
                 {
-#ifdef DEBUG
-                    printf("Unexpected IO error with client -- closing connection and terminating bash\n");
-#endif
-                    // kill bash subprocess
-                    kill(subprocess_by_fd[evlist[i].data.fd], SIGTERM);
-                    close_paired_fds(evlist[i].data.fd);
+                    relay_bytes(evlist[i].data.fd);
                 }
-            }
-            else if (evlist[i].events & (EPOLLHUP | EPOLLERR))
-            {
-#ifdef DEBUG
-                printf("Recd EPOLLHUP or EPOLLERR on %d -- closing it and %d\n", evlist[i].data.fd, client_fd_pairs[evlist[i].data.fd]);
-#endif
-                close_paired_fds(evlist[i].data.fd);
+                else if (evlist[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR))
+                {
+                    destroy_client(evlist[i].data.fd);
+                }
             }
         }
     }
 }
 
-int close_paired_fds(int fd)
+
+void destroy_client(int fd_1)
 {
-    return close(fd) || close(client_fd_pairs[fd]);
+    int fd_2 = client_fd_pairs[fd_1];
+
+    epoll_ctl(efd, EPOLL_CTL_DEL, fd_1, NULL);
+    epoll_ctl(efd, EPOLL_CTL_DEL, fd_2, NULL);
+
+    close(fd_1);
+    close(fd_2);
 }
 
 // Protocol handshake, setup of PTY, store client description in global register, fork
@@ -191,9 +186,6 @@ void * handle_client(void * client_fd_ptr)
 {
     char * ptyslave;
     int ptymaster_fd;
-
-    struct epoll_event ev[2];
-    pid_t subproc;
 
     int socket_fd = *(int *) client_fd_ptr;
 
@@ -208,7 +200,6 @@ void * handle_client(void * client_fd_ptr)
         pthread_exit(NULL);
     }
 
-
     if (setup_pty(&ptymaster_fd, &ptyslave))
     {
         close(socket_fd);
@@ -218,30 +209,26 @@ void * handle_client(void * client_fd_ptr)
     set_nonblocking(socket_fd);
     set_nonblocking(ptymaster_fd);
 
-    switch (subproc = fork())
+    switch (fork())
     {
         case -1:
             perror("fork failed");
-            exit(EXIT_FAILURE);
+            close(socket_fd);
+            pthread_exit(NULL);
         case 0:
             close(ptymaster_fd);
+            close(socket_fd);
             open_terminal_and_exec_bash(ptyslave);
             exit(EXIT_FAILURE);
     }
-    free(ptyslave);
-    // Special global registers for client description
-    // The subprocess PID is redundant so that it can be found based on either socket or pty
-    client_fd_pairs[socket_fd] = ptymaster_fd;
-    client_fd_pairs[ptymaster_fd] = socket_fd;
-    subprocess_by_fd[socket_fd] = subproc;
-    subprocess_by_fd[ptymaster_fd] = subproc;
 
-    ev[0].data.fd = socket_fd;
-    ev[1].data.fd = ptymaster_fd;
-    ev[0].events = EPOLLIN | EPOLLET;
-    ev[1].events = EPOLLIN | EPOLLET;
-    epoll_ctl(efd, EPOLL_CTL_ADD, socket_fd, ev);
-    epoll_ctl(efd, EPOLL_CTL_ADD, ptymaster_fd, ev + 1);
+    free(ptyslave);
+    if (register_client(socket_fd, ptymaster_fd))
+    {
+        close(socket_fd);
+        close(ptymaster_fd);
+        pthread_exit(NULL);
+    }
 
     return NULL;
 }
@@ -302,57 +289,91 @@ int init_socket()
     return fd;
 }
 
-
-int relay_bytes(int whence, int whither)
+int register_client(int socket, int pty)
 {
-    static char buff[BUFF_MAX];
-    static ssize_t nread;
 
-    // does not handle malicious clients!
-    // better would be a rotation through readable files, rather
-    // than being patient with a greedy client
-    while ((nread = read(whence, buff, BUFF_MAX)) > 0)
+    struct epoll_event ev;
+
+    client_fd_pairs[socket] = pty;
+    client_fd_pairs[pty] = socket;
+
+    // Add the two argument FDs to be epolled for input:
+    // Note that if adding fails, this may be due simply to premature
+    // closure of client connection causing FDs to already be closed:
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = socket;
+    if (epoll_ctl(efd, EPOLL_CTL_ADD, socket, &ev) == -1)
     {
-        if (eager_write(whither, buff, nread) == -1)
-        {
-            perror("Failed writing");
-            break;
-        }
-    }
-    if (nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN)
-    {
-        perror("Error reading");
+        perror("failed to add to epoll");
         return -1;
     }
+    ev.data.fd = pty;
+    if (epoll_ctl(efd, EPOLL_CTL_ADD, pty, &ev) == -1)
+    {
+        // Remove the socket here, before closing the file itself
+        epoll_ctl(efd, EPOLL_CTL_DEL, socket, NULL);
+        perror("failed to add to epoll");
+        return -1;
+    }
+
     return 0;
 }
 
-void open_terminal_and_exec_bash(char * ptyslave)
+
+void relay_bytes(int whence)
+{
+
+    char buff[BUFF_MAX];
+    ssize_t nread;
+    int total;
+    int nwritten;
+    int whither = client_fd_pairs[whence];
+
+    errno = 0;
+    if((nread = read(whence, buff, BUFF_MAX)) > 0)
+    {
+        total = 0;
+        do {
+          if ((nwritten = write(whither, buff + total, nread - total)) == -1) break;
+          total += nwritten;
+        } while (total < nread);
+    }
+    if (nread <= 0 || (errno && errno != EWOULDBLOCK && errno != EAGAIN))
+    {
+        perror("Error reading");
+        destroy_client(whence);
+    }
+    return;
+}
+
+void open_terminal_and_exec_bash(char * slavename)
 {
     int slave_fd;
 
     if (setsid() == -1)
     {
         perror("setsid failed");
-        exit(EXIT_FAILURE);
+        return;
     }
 
-    if ((slave_fd = open(ptyslave, O_RDWR)) == -1)
+    if ((slave_fd = open(slavename, O_RDWR)) == -1)
     {
         perror("Failed to open slave");
-        exit(EXIT_FAILURE);
+        return;
     }
-    free(ptyslave);
+
+    free(slavename);
+
     if ((dup2(slave_fd, STDIN_FILENO) == -1)
         || (dup2(slave_fd, STDOUT_FILENO) == -1)
         || (dup2(slave_fd, STDERR_FILENO) == -1))
     {
         perror("dup2 to either stdout, stdin, or stderr failed");
-        exit(EXIT_FAILURE);
+        return;
     }
+
     execlp("bash", "bash", NULL);
     perror("Failed to exec bash");
-    exit(EXIT_FAILURE);
 }
 
 void sigalrm_handler(int signal, siginfo_t * sip, void * ignore)

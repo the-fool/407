@@ -4,9 +4,10 @@
 #include <unistd.h>
 #include <time.h>
 
-
+int workit = 1;
 void work(int task) {
-  printf("working on %d\n", task);
+  printf("working on %d :: %d\n", task, workit);
+  workit++;
   usleep(13000ULL * (int)sysconf(_SC_NPROCESSORS_ONLN) / 4 * rand() / RAND_MAX);
 }
 
