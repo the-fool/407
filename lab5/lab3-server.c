@@ -158,7 +158,7 @@ void * epoll_loop(void * _)
             {
                 if (evlist[i].events & EPOLLIN)
                 {
-                    relay_bytes(evlist[i].data.fd);
+                    tpool_add_task(evlist[i].data.fd);
                 }
                 else if (evlist[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR))
                 {
