@@ -58,7 +58,7 @@ int eager_write(int fd, const char * const str, size_t len);
 void relay_bytes(int whence);
 void destroy_client(int fd);
 void sigalrm_handler(int signal, siginfo_t * sip, void * ignore);
-void epoll_loop(void *);
+void epoll_loop(void);
 void * handle_client(void * client_fd_ptr);
 int register_client(int socket, int pty);
 void open_terminal_and_exec_bash(char * ptyslave);
@@ -105,7 +105,7 @@ int main()
         exit(EXIT_FAILURE);
     }
 
-    epoll_loop(NULL);
+    epoll_loop();
 
     exit(EXIT_FAILURE);
 }
@@ -113,7 +113,7 @@ int main()
 
 // This is the epoll loop
 // it waits, and then decides whether to relay data or close down a pair of resources
-void epoll_loop(void * _)
+void epoll_loop()
 {
     struct epoll_event evlist[MAX_CLIENTS * 2 + 1];
     int nevents;
