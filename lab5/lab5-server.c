@@ -64,16 +64,16 @@ int register_client(int socket, int pty);
 void open_terminal_and_exec_bash(char * ptyslave);
 void handle_io_event(int fd);
 void accept_client();
+int get_paired_client_fd(int fd, client_t* client);
 client_t * new_client(int socket, int pty);
 // epoll instance
 int efd;
 
 // main listening socket
 int listen_fd;
-// Kind of like a hash, or list of tuples
-// At index i, the value is the associated FD for FD i (pty || socket)
-int client_fd_pairs[MAX_CLIENTS * 2 + 5];
 
+// Kind of like a hash, or list of tuples
+// At index i, the value is the associated client for FD i (pty || socket)
 client_t * fd_client_map[MAX_CLIENTS * 2 + 5];
 
 
@@ -150,10 +150,14 @@ void epoll_loop()
     }
 }
 
+int get_paired_client_fd(int fd, client_t* client) {
+  return (fd == client->pty_fd ? client->socket_fd : client->pty_fd);
+}
 
 void destroy_client(int fd_1)
 {
-    int fd_2 = client_fd_pairs[fd_1];
+    client_t * client = fd_client_map[fd_1];
+    int fd_2 = get_paired_client_fd(fd_1, client);
 
     epoll_ctl(efd, EPOLL_CTL_DEL, fd_1, NULL);
     epoll_ctl(efd, EPOLL_CTL_DEL, fd_2, NULL);
@@ -290,9 +294,6 @@ int register_client(int socket, int pty)
     struct epoll_event ev;
     client_t * client = new_client(socket, pty);
 
-    client_fd_pairs[socket] = pty;
-    client_fd_pairs[pty] = socket;
-
     fd_client_map[socket] = client;
     fd_client_map[pty] = client;
 
@@ -357,9 +358,9 @@ void relay_bytes(int whence)
     ssize_t nread;
     int total;
     int nwritten;
-    // int whither = client_fd_pairs[whence];
+
     client_t * client = fd_client_map[whence];
-    int whither = (whence == client->pty_fd ? client->socket_fd : client->pty_fd);
+    int whither = get_paired_client_fd(whence, client);
 
     errno = 0;
     if ((nread = read(whence, buff, BUFF_MAX)) > 0)
