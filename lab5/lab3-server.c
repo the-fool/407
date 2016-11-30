@@ -38,16 +38,18 @@
 int init_socket();
 int set_nonblocking(int fd);
 int handshake_protocol(int connect_fd);
+int setup_pty(int * masterfd_p, char ** slavename_p);
 int safe_write(const int fd, char const * msg);
 int safe_read(const int fd, char const * expected);
 int eager_write(int fd, const char * const str, size_t len);
 int relay_bytes(int whence, int whither);
 int close_paired_fds(int fd);
 void sigalrm_handler(int signal, siginfo_t * sip, void * ignore);
-void * io_loop(void *);
+void * epoll_loop(void *);
 void * handle_client(void * client_fd_ptr);
+int register_client(int socket, int pty);
 void open_terminal_and_exec_bash(char * ptyslave);
-
+void relay_data(int whence);
 // epoll instance
 int efd;
 
@@ -65,12 +67,14 @@ pid_t subprocess_by_fd[MAX_CLIENTS * 2 + 5];
 // Each client is given a new thread -- which is inefficient
 int main()
 {
-    int server_socket_fd;
+    int server_listen_fd;
     int client_fd;
     int * client_fd_ptr;
     pthread_t thread_id;
 
-    if ((server_socket_fd = init_socket()) == -1)
+    tpool_init(relay_data);
+
+    if ((server_listen_fd = init_socket()) == -1)
     {
         exit(EXIT_FAILURE);
     }
@@ -81,60 +85,54 @@ int main()
         exit(EXIT_FAILURE);
     }
 
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
+    {
+        perror("Failed to set SIGPIPE to SIG_IGN");
+        exit(EXIT_FAILURE);
+    }
+
     if ((efd = epoll_create1(EPOLL_CLOEXEC)) == -1)
     {
         perror("epoll creation failed");
         exit(EXIT_FAILURE);
     }
 
-    pthread_create(&thread_id, NULL, &io_loop, NULL);
+    if (pthread_create(&thread_id, NULL, &epoll_loop, NULL))
+    {
+        perror("Failed to create thread");
+        exit(EXIT_FAILURE);
+    }
+    ;
 
     while (1)
     {
-      #ifdef DEBUG
-        printf("Server is waiting\n");
-#endif
-        if ((client_fd = accept4(server_socket_fd, (struct sockaddr *) NULL, NULL, SOCK_CLOEXEC)) == -1)
+        if ((client_fd = accept4(server_listen_fd, (struct sockaddr *) NULL, NULL, SOCK_CLOEXEC)) == -1)
         {
             perror("Socket accept failed");
         }
+        else if (client_fd >= 2 * MAX_CLIENTS + 5)
+        {
+            // Too many clients -- reject this one
+            close(client_fd);
+        }
         else
         {
-#ifdef DEBUG
-            printf("Received client\n");
-#endif
             client_fd_ptr = (int *) malloc(sizeof(int));
             *client_fd_ptr = client_fd;
             if (pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr))
             {
                 perror("failed to create pthread");
+                close(client_fd);
             }
         }
     }
+    exit(EXIT_FAILURE);
 }
 
-// General purpose non-blockifier for file-descriptors
-int set_nonblocking(int fd)
-{
-    int flags;
-
-    if ((flags = fcntl(fd, F_GETFL, 0)) == -1)
-    {
-        perror("fcntl get flags");
-        return -1;
-    }
-    flags |= O_NONBLOCK;
-    if (fcntl(fd, F_SETFL, flags) == -1)
-    {
-        perror("fcntl set flags");
-        return -1;
-    }
-    return 0;
-}
 
 // This is the epoll loop
 // it waits, and then decides whether to relay data or close down a pair of resources
-void * io_loop(void * _)
+void * epoll_loop(void * _)
 {
     struct epoll_event evlist[MAX_EVENTS];
     int nevents;
@@ -192,33 +190,33 @@ int close_paired_fds(int fd)
 void * handle_client(void * client_fd_ptr)
 {
     char * ptyslave;
-    struct epoll_event ev[2];
     int ptymaster_fd;
+
+    struct epoll_event ev[2];
     pid_t subproc;
 
     int socket_fd = *(int *) client_fd_ptr;
 
-    // clear up memory
     free(client_fd_ptr);
+
     pthread_detach(pthread_self());
 
     if (handshake_protocol(socket_fd))
     {
         perror("Client failed protocol exchange");
         close(socket_fd);
-        return NULL;
+        pthread_exit(NULL);
     }
-    set_nonblocking(socket_fd);
-    if ((ptymaster_fd = posix_openpt(O_RDWR | O_CLOEXEC)) == -1)
+
+
+    if (setup_pty(&ptymaster_fd, &ptyslave))
     {
-        perror("openpt failed");
         close(socket_fd);
-        return NULL;
+        pthread_exit(NULL);
     }
+
+    set_nonblocking(socket_fd);
     set_nonblocking(ptymaster_fd);
-    unlockpt(ptymaster_fd);
-    ptyslave = (char *) malloc(1024); // malloc first, to avoid race condition
-    strcpy(ptyslave, ptsname(ptymaster_fd));
 
     switch (subproc = fork())
     {
@@ -248,12 +246,32 @@ void * handle_client(void * client_fd_ptr)
     return NULL;
 }
 
+int setup_pty(int * masterfd_p, char ** slavename_p)
+{
+    int master_fd;
+    char * slavename;
+
+    if ((master_fd = posix_openpt(O_RDWR | O_CLOEXEC)) == -1)
+    {
+        perror("openpt failed");
+        return -1;
+    }
+
+    unlockpt(master_fd);
+    slavename = (char *) malloc(1024);
+    strcpy(slavename, ptsname(master_fd));
+
+    *masterfd_p = master_fd;
+    *slavename_p = slavename;
+    return 0;
+}
+
 int init_socket()
 {
     int fd;
     struct sockaddr_in addr;
 
-    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    if ((fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1)
     {
         perror("Socket creation failed");
         return -1;
@@ -264,12 +282,7 @@ int init_socket()
         perror("setsockopt: SO_REUSEADDR");
         return -1;
     }
-    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &i, sizeof(i)))
-    {
-        perror("setsockopt: TCP_NODELAY");
-        return -1;
-    }
-
+    memset(&addr, 0, sizeof addr);
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(PORT);
@@ -280,7 +293,7 @@ int init_socket()
         return -1;
     }
 
-    if (listen(fd, 5) == -1)
+    if (listen(fd, 512) == -1)
     {
         perror("Listen failed\n");
         return -1;
@@ -448,4 +461,23 @@ int eager_write(int fd, const char * const msg, size_t len)
     accum = 0;
     nwrote = 0;
     return nwrote;
+}
+
+// General purpose non-blockifier for file-descriptors
+int set_nonblocking(int fd)
+{
+    int flags;
+
+    if ((flags = fcntl(fd, F_GETFL, 0)) == -1)
+    {
+        perror("fcntl get flags");
+        return -1;
+    }
+    flags |= O_NONBLOCK;
+    if (fcntl(fd, F_SETFL, flags) == -1)
+    {
+        perror("fcntl set flags");
+        return -1;
+    }
+    return 0;
 }
