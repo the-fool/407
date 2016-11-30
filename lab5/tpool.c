@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include "tpool.h"
 
-#define DEBUG 1
+#define DEBUG 0
 
 typedef struct sem {
   pthread_mutex_t mutex;
@@ -119,15 +119,15 @@ static void* thread_loop(void* _thread) {
     pthread_mutex_lock(&tpool.queue->lock);
     task = pop_task(tpool.queue);
     #if DEBUG
-      printf("Worker %c: got %d\n", td->id, task);
-      print_queue(tpool.queue);
+    printf("Worker %c: got %d\n", td->id, task);
+    print_queue(tpool.queue);
     #endif
     pthread_mutex_unlock(&tpool.queue->lock);
 
     tpool.subroutine(task);
-  #if DEBUG
+    #if DEBUG
     printf("Worker %c: finished %d\n", td->id, task);
-  #endif
+    #endif
   }
   return NULL;
 }
@@ -156,14 +156,14 @@ static int task_queue_init() {
 
 static int push_task(task_queue* q, int task) {
   if (is_queue_full(q) && enlarge_queue(q)) {
-    printf("Enlarge queue failed\n");
+    fprintf(stderr, "Enlarge queue failed\n");
     return -1;
   }
 
   q->buffer[q->tail] = task;
   q->tail = (q->tail + 1) % q->len;
   #if DEBUG
-    printf("Q got %d \n", task);
+  printf("Q got %d \n", task);
   #endif
   sem_post(q->has_task);
 
@@ -190,8 +190,8 @@ static int enlarge_queue(task_queue* q) {
   q->len = new_len;
 
   #if DEBUG
-    printf("Enlarged queue :: ");
-    print_queue(q);
+  printf("Enlarged queue :: ");
+  print_queue(q);
   #endif
 
   return 0; // success
@@ -239,7 +239,6 @@ static void sem_init(sem* sem) {
 }
 
 static void sem_post(sem* sem) {
-  printf("before mutex lock\n");
   pthread_mutex_lock(&sem->mutex);
   sem->flag += 1;
   pthread_cond_signal(&sem->condition);
