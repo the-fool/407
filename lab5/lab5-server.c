@@ -34,6 +34,20 @@
 #define OK          "<ok>\n"
 #define ERROR       "<error>\n"
 
+typedef enum handshake_state
+{
+    init,
+    wait_for_secret,
+    complete
+} handshake_state_t;
+
+typedef struct client
+{
+    int socket_fd;
+    int pty_fd;
+    handshake_state_t state;
+} client_t;
+
 int init_socket();
 int set_nonblocking(int fd);
 int handshake_protocol(int connect_fd);
@@ -48,32 +62,33 @@ void * epoll_loop(void *);
 void * handle_client(void * client_fd_ptr);
 int register_client(int socket, int pty);
 void open_terminal_and_exec_bash(char * ptyslave);
-
+void handle_io_event(int fd);
+void accept_client();
 // epoll instance
 int efd;
 
+// main listening socket
+int listen_fd;
 // Kind of like a hash, or list of tuples
 // At index i, the value is the associated FD for FD i (pty || socket)
 int client_fd_pairs[MAX_CLIENTS * 2 + 5];
 
-// Same idea -- map the exec'd subprocces PID to the FDs that relate to it
-// If there is a socket connection at FD 15, then the 15th spot in this array
-// holds the PID of the exec'd process associated with the socket
-pid_t subprocess_by_fd[MAX_CLIENTS * 2 + 5];
+client_t * fd_client_map[MAX_CLIENTS * 2 + 5];
 
 
 // Initialize resources and go into an accept() loop
 // Each client is given a new thread -- which is inefficient
 int main()
 {
-    int server_listen_fd;
-    int client_fd;
-    int * client_fd_ptr;
-    pthread_t thread_id;
+    tpool_init(handle_io_event);
 
-    tpool_init(relay_bytes);
+    if ((efd = epoll_create1(EPOLL_CLOEXEC)) == -1)
+    {
+        perror("epoll creation failed");
+        exit(EXIT_FAILURE);
+    }
 
-    if ((server_listen_fd = init_socket()) == -1)
+    if (init_socket() == -1)
     {
         exit(EXIT_FAILURE);
     }
@@ -90,41 +105,8 @@ int main()
         exit(EXIT_FAILURE);
     }
 
-    if ((efd = epoll_create1(EPOLL_CLOEXEC)) == -1)
-    {
-        perror("epoll creation failed");
-        exit(EXIT_FAILURE);
-    }
+    epoll_loop(NULL);
 
-    if (pthread_create(&thread_id, NULL, &epoll_loop, NULL))
-    {
-        perror("Failed to create thread");
-        exit(EXIT_FAILURE);
-    }
-    ;
-
-    while (1)
-    {
-        if ((client_fd = accept4(server_listen_fd, (struct sockaddr *) NULL, NULL, SOCK_CLOEXEC)) == -1)
-        {
-            perror("Socket accept failed");
-        }
-        else if (client_fd >= 2 * MAX_CLIENTS + 5)
-        {
-            // Too many clients -- reject this one
-            close(client_fd);
-        }
-        else
-        {
-            client_fd_ptr = (int *) malloc(sizeof(int));
-            *client_fd_ptr = client_fd;
-            if (pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr))
-            {
-                perror("failed to create pthread");
-                close(client_fd);
-            }
-        }
-    }
     exit(EXIT_FAILURE);
 }
 
@@ -133,13 +115,25 @@ int main()
 // it waits, and then decides whether to relay data or close down a pair of resources
 void * epoll_loop(void * _)
 {
-    struct epoll_event evlist[MAX_CLIENTS * 2];
+    struct epoll_event evlist[MAX_CLIENTS * 2 + 1];
     int nevents;
     int i;
 
     while (1)
     {
         nevents = epoll_wait(efd, evlist, MAX_CLIENTS * 2, -1);
+        for (i = 0; i < nevents; i++)
+        {
+            if (evlist[i].events & EPOLLIN)
+            {
+                tpool_add_task(evlist[i].data.fd);
+            }
+            else if (evlist[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR))
+            {
+                destroy_client(evlist[i].data.fd);
+            }
+        }
+        // Error case
         if (nevents < 0)
         {
             if (errno == EINTR)
@@ -150,20 +144,6 @@ void * epoll_loop(void * _)
             {
                 perror("epoll wait");
                 exit(EXIT_FAILURE);
-            }
-        }
-        else
-        {
-            for (i = 0; i < nevents; i++)
-            {
-                if (evlist[i].events & EPOLLIN)
-                {
-                    tpool_add_task(evlist[i].data.fd);
-                }
-                else if (evlist[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR))
-                {
-                    destroy_client(evlist[i].data.fd);
-                }
             }
         }
     }
@@ -255,16 +235,15 @@ int setup_pty(int * masterfd_p, char ** slavename_p)
 
 int init_socket()
 {
-    int fd;
     struct sockaddr_in addr;
 
-    if ((fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1)
+    if ((listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1)
     {
         perror("Socket creation failed");
         return -1;
     }
     int i = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i)))
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i)))
     {
         perror("setsockopt: SO_REUSEADDR");
         return -1;
@@ -274,24 +253,30 @@ int init_socket()
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(PORT);
 
-    if (bind(fd, (struct sockaddr *) &addr, sizeof addr) == -1)
+    if (bind(listen_fd, (struct sockaddr *) &addr, sizeof addr) == -1)
     {
         perror("Bind failed");
         return -1;
     }
 
-    if (listen(fd, 512) == -1)
+    if (listen(listen_fd, 512) == -1)
     {
         perror("Listen failed\n");
         return -1;
     }
 
-    return fd;
+    set_nonblocking(listen_fd);
+    // Add the socket fd to the epoll list
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = listen_fd;
+    epoll_ctl(efd, EPOLL_CTL_ADD, listen_fd, &ev);
+
+    return 0;
 }
 
 int register_client(int socket, int pty)
 {
-
     struct epoll_event ev;
 
     client_fd_pairs[socket] = pty;
@@ -319,10 +304,41 @@ int register_client(int socket, int pty)
     return 0;
 }
 
+void accept_client() {
+  int client_fd;
+  int * client_fd_ptr;
+  pthread_t thread_id;
+  if ((client_fd = accept4(listen_fd, (struct sockaddr *) NULL, NULL, SOCK_CLOEXEC)) == -1)
+  {
+      perror("Socket accept failed");
+  }
+  else if (client_fd >= 2 * MAX_CLIENTS + 5)
+  {
+      // Too many clients -- reject this one
+      close(client_fd);
+  }
+  else
+  {
+      client_fd_ptr = (int *) malloc(sizeof(int));
+      *client_fd_ptr = client_fd;
+      if (pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr))
+      {
+          perror("failed to create pthread");
+          close(client_fd);
+      }
+  }
+}
+
+void handle_io_event(int fd) {
+  if (fd == listen_fd) {
+    accept_client();
+  } else {
+    relay_bytes(fd);
+  }
+}
 
 void relay_bytes(int whence)
 {
-
     char buff[BUFF_MAX];
     ssize_t nread;
     int total;
@@ -330,15 +346,20 @@ void relay_bytes(int whence)
     int whither = client_fd_pairs[whence];
 
     errno = 0;
-    if((nread = read(whence, buff, BUFF_MAX)) > 0)
+    if ((nread = read(whence, buff, BUFF_MAX)) > 0)
     {
         total = 0;
-        do {
-          if ((nwritten = write(whither, buff + total, nread - total)) == -1) break;
-          total += nwritten;
-        } while (total < nread);
+        do
+        {
+            if ((nwritten = write(whither, buff + total, nread - total)) == -1)
+            {
+                break;
+            }
+            total += nwritten;
+        }
+        while (total < nread);
     }
-    if (nread <= 0 || (errno && errno != EWOULDBLOCK && errno != EAGAIN))
+    if (nread < 0 && errno != EWOULDBLOCK && errno != EAGAIN)
     {
         perror("Error reading");
         destroy_client(whence);
@@ -378,15 +399,14 @@ void open_terminal_and_exec_bash(char * slavename)
 
 void sigalrm_handler(int signal, siginfo_t * sip, void * ignore)
 {
-
-#ifdef DEBUG
     printf("caught alarm, with value: %d\n", *(int *) (sip->si_ptr));
-#endif
     // set the flag to flown, which will be used in the handshake routine
     // to determine failure.
     // Most likely, though, the alarm will cause a blocked read() call to be errored with EINTR
     *(int *) sip->si_ptr = 1;
 }
+
+
 int handshake_protocol(int fd)
 {
     // 3 second timer

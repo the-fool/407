@@ -211,7 +211,7 @@ static int is_queue_full(task_queue* q) {
 }
 
 
-#if DEBUG
+
   static void print_queue(task_queue* q) {
     int i = 0;
     printf(" [ ");
@@ -225,7 +225,7 @@ static int is_queue_full(task_queue* q) {
     }
     printf(" ] \n\n");
   }
-#endif
+
 
 
 
