@@ -154,16 +154,26 @@ int get_paired_client_fd(int fd, client_t* client) {
   return (fd == client->pty_fd ? client->socket_fd : client->pty_fd);
 }
 
-void destroy_client(int fd_1)
+void destroy_client(int fd)
 {
-    client_t * client = fd_client_map[fd_1];
-    int fd_2 = get_paired_client_fd(fd_1, client);
+    client_t * client = fd_client_map[fd];
+    if (client == NULL) {
+      close(fd);
+      return;
+    }
+    int socket = client->socket_fd;
+    int pty = client->pty_fd;
 
-    epoll_ctl(efd, EPOLL_CTL_DEL, fd_1, NULL);
-    epoll_ctl(efd, EPOLL_CTL_DEL, fd_2, NULL);
+    epoll_ctl(efd, EPOLL_CTL_DEL, socket, NULL);
+    epoll_ctl(efd, EPOLL_CTL_DEL, pty, NULL);
 
-    close(fd_1);
-    close(fd_2);
+    if (close(socket) != -1) {
+      fd_client_map[socket] = NULL;
+    }
+    if (close(pty) != -1) {
+      fd_client_map[pty] = NULL;
+    }
+    free(client);
 }
 
 // Protocol handshake, setup of PTY, store client description in global register, fork
