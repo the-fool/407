@@ -64,6 +64,7 @@ int register_client(int socket, int pty);
 void open_terminal_and_exec_bash(char * ptyslave);
 void handle_io_event(int fd);
 void accept_client();
+client_t * new_client(int socket, int pty);
 // epoll instance
 int efd;
 
@@ -275,12 +276,25 @@ int init_socket()
     return 0;
 }
 
+client_t * new_client(int socket, int pty) {
+  client_t * client = (client_t *) malloc(sizeof (client_t));
+  client->pty_fd = pty;
+  client->socket_fd = socket;
+  client->state = init;
+
+  return client;
+}
+
 int register_client(int socket, int pty)
 {
     struct epoll_event ev;
+    client_t * client = new_client(socket, pty);
 
     client_fd_pairs[socket] = pty;
     client_fd_pairs[pty] = socket;
+
+    fd_client_map[socket] = client;
+    fd_client_map[pty] = client;
 
     // Add the two argument FDs to be epolled for input:
     // Note that if adding fails, this may be due simply to premature
@@ -343,7 +357,9 @@ void relay_bytes(int whence)
     ssize_t nread;
     int total;
     int nwritten;
-    int whither = client_fd_pairs[whence];
+    // int whither = client_fd_pairs[whence];
+    client_t * client = fd_client_map[whence];
+    int whither = (whence == client->pty_fd ? client->socket_fd : client->pty_fd);
 
     errno = 0;
     if ((nread = read(whence, buff, BUFF_MAX)) > 0)
