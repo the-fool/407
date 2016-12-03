@@ -34,38 +34,37 @@
 #define OK          "<ok>\n"
 #define ERROR       "<error>\n"
 
-typedef enum handshake_state
+typedef enum client_state
 {
-    init,
-    wait_for_secret,
+    secret,
     complete
-} handshake_state_t;
+} client_state_t;
 
 typedef struct client
 {
     int socket_fd;
     int pty_fd;
-    handshake_state_t state;
+    client_state_t state;
 } client_t;
 
 int init_socket();
 int set_nonblocking(int fd);
-int handshake_protocol(int connect_fd);
+client_state_t get_client_state(int fd);
 int setup_pty(int * masterfd_p, char ** slavename_p);
 int safe_write(const int fd, char const * msg);
-int safe_read(const int fd, char const * expected);
 int eager_write(int fd, const char * const str, size_t len);
 void relay_bytes(int whence);
 void destroy_client(int fd);
-void sigalrm_handler(int signal, siginfo_t * sip, void * ignore);
 void epoll_loop(void);
-void * handle_client(void * client_fd_ptr);
-int register_client(int socket, int pty);
+int establish_client(int);
+int register_client_by_socket(int socket);
 void open_terminal_and_exec_bash(char * ptyslave);
 void handle_io_event(int fd);
 void accept_client();
-int get_paired_client_fd(int fd, client_t* client);
-client_t * new_client(int socket, int pty);
+int get_paired_client_fd(int fd, client_t * client);
+int validate_secret(int sock_fd);
+int set_client_pty(client_t * client, int pty);
+client_t * new_client(int socket);
 // epoll instance
 int efd;
 
@@ -150,50 +149,92 @@ void epoll_loop()
     }
 }
 
-int get_paired_client_fd(int fd, client_t* client) {
-  return (fd == client->pty_fd ? client->socket_fd : client->pty_fd);
+void handle_io_event(int fd)
+{
+    if (fd == listen_fd)
+    {
+        accept_client();
+    }
+    else if (get_client_state(fd) == secret)
+    {
+        if (validate_secret(fd) || establish_client(fd))
+        {
+            fprintf(stderr, "Error establishing client\n");
+            destroy_client(fd);
+        }
+    }
+    else
+    {
+        relay_bytes(fd);
+    }
+}
+
+int validate_secret(int sock_fd)
+{
+    char * line;
+
+    if ((line = readline(sock_fd)) == NULL)
+    {
+        perror("Error reading from client");
+        return 1;
+    }
+
+    if (strcmp(SECRET, line))
+    {
+        fprintf(stderr, "Client gave incorrect protocol\n");
+        safe_write(sock_fd, ERROR);
+        return 1;
+    }
+    return 0;
+}
+
+client_state_t get_client_state(int fd)
+{
+    return fd_client_map[fd]->state;
+}
+
+int get_paired_client_fd(int fd, client_t * client)
+{
+    return (fd == client->pty_fd ? client->socket_fd : client->pty_fd);
+}
+
+void unbind_fd(int fd)
+{
+    epoll_ctl(efd, EPOLL_CTL_DEL, fd, NULL);
+    if (close(fd) != -1)
+    {
+        fd_client_map[fd] = NULL;
+    }
 }
 
 void destroy_client(int fd)
 {
     client_t * client = fd_client_map[fd];
-    if (client == NULL) {
-      close(fd);
-      return;
+
+    if (client == NULL)
+    {
+        close(fd);
+        return;
     }
     int socket = client->socket_fd;
     int pty = client->pty_fd;
 
-    epoll_ctl(efd, EPOLL_CTL_DEL, socket, NULL);
-    epoll_ctl(efd, EPOLL_CTL_DEL, pty, NULL);
+    unbind_fd(socket);
 
-    if (close(socket) != -1) {
-      fd_client_map[socket] = NULL;
+    if (client->state == complete)
+    {
+        unbind_fd(pty);
     }
-    if (close(pty) != -1) {
-      fd_client_map[pty] = NULL;
-    }
+
     free(client);
 }
 
-// Protocol handshake, setup of PTY, store client description in global register, fork
-void * handle_client(void * client_fd_ptr)
+
+int establish_client(int socket_fd)
 {
     char * ptyslave;
     int ptymaster_fd;
-
-    int socket_fd = *(int *) client_fd_ptr;
-
-    free(client_fd_ptr);
-
-    pthread_detach(pthread_self());
-
-    if (handshake_protocol(socket_fd))
-    {
-        perror("Client failed protocol exchange");
-        close(socket_fd);
-        pthread_exit(NULL);
-    }
+    client_t * client = fd_client_map[socket_fd];
 
     if (setup_pty(&ptymaster_fd, &ptyslave))
     {
@@ -203,29 +244,31 @@ void * handle_client(void * client_fd_ptr)
 
     set_nonblocking(socket_fd);
     set_nonblocking(ptymaster_fd);
-
+    if (set_client_pty(client, ptymaster_fd))
+    {
+        return -1;
+    }
     switch (fork())
     {
         case -1:
             perror("fork failed");
-            close(socket_fd);
-            pthread_exit(NULL);
+            return -1;
         case 0:
             close(ptymaster_fd);
             close(socket_fd);
             open_terminal_and_exec_bash(ptyslave);
+            fprintf(stderr, "Failed to exec bash\n");
             exit(EXIT_FAILURE);
     }
 
-    free(ptyslave);
-    if (register_client(socket_fd, ptymaster_fd))
+    if (safe_write(socket_fd, OK))
     {
-        close(socket_fd);
-        close(ptymaster_fd);
-        pthread_exit(NULL);
+        return -1;
     }
-
-    return NULL;
+    client->state = complete;
+    free(ptyslave);
+    printf("client established -- sock: %d  pty: %d\n", client->socket_fd, client->pty_fd);
+    return 0;
 }
 
 int setup_pty(int * masterfd_p, char ** slavename_p)
@@ -290,26 +333,23 @@ int init_socket()
     return 0;
 }
 
-client_t * new_client(int socket, int pty) {
-  client_t * client = (client_t *) malloc(sizeof (client_t));
-  client->pty_fd = pty;
-  client->socket_fd = socket;
-  client->state = init;
+client_t * new_client(int socket)
+{
+    client_t * client = (client_t *) malloc(sizeof(client_t));
 
-  return client;
+    client->socket_fd = socket;
+    client->state = secret;
+    client->pty_fd = -1; // not set yet
+    return client;
 }
 
-int register_client(int socket, int pty)
+int register_client_by_socket(int socket)
 {
     struct epoll_event ev;
-    client_t * client = new_client(socket, pty);
+    client_t * client = new_client(socket);
 
     fd_client_map[socket] = client;
-    fd_client_map[pty] = client;
 
-    // Add the two argument FDs to be epolled for input:
-    // Note that if adding fails, this may be due simply to premature
-    // closure of client connection causing FDs to already be closed:
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = socket;
     if (epoll_ctl(efd, EPOLL_CTL_ADD, socket, &ev) == -1)
@@ -317,11 +357,23 @@ int register_client(int socket, int pty)
         perror("failed to add to epoll");
         return -1;
     }
+    return 0;
+}
+
+int set_client_pty(client_t * client, int pty)
+{
+    struct epoll_event ev;
+
+    client->pty_fd = pty;
+    fd_client_map[pty] = client;
+
+    ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = pty;
+
     if (epoll_ctl(efd, EPOLL_CTL_ADD, pty, &ev) == -1)
     {
         // Remove the socket here, before closing the file itself
-        epoll_ctl(efd, EPOLL_CTL_DEL, socket, NULL);
+        epoll_ctl(efd, EPOLL_CTL_DEL, client->socket_fd, NULL);
         perror("failed to add to epoll");
         return -1;
     }
@@ -329,38 +381,29 @@ int register_client(int socket, int pty)
     return 0;
 }
 
-void accept_client() {
-  int client_fd;
-  int * client_fd_ptr;
-  pthread_t thread_id;
-  if ((client_fd = accept4(listen_fd, (struct sockaddr *) NULL, NULL, SOCK_CLOEXEC)) == -1)
-  {
-      perror("Socket accept failed");
-  }
-  else if (client_fd >= 2 * MAX_CLIENTS + 5)
-  {
-      // Too many clients -- reject this one
-      close(client_fd);
-  }
-  else
-  {
-      client_fd_ptr = (int *) malloc(sizeof(int));
-      *client_fd_ptr = client_fd;
-      if (pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr))
-      {
-          perror("failed to create pthread");
-          close(client_fd);
-      }
-  }
+void accept_client()
+{
+    int client_fd;
+
+    if ((client_fd = accept4(listen_fd, (struct sockaddr *) NULL, NULL, SOCK_CLOEXEC)) == -1)
+    {
+        perror("Socket accept failed");
+        return;
+    }
+    if (client_fd >= 2 * MAX_CLIENTS + 5)
+    {
+        // Too many clients -- reject this one
+        close(client_fd);
+        return;
+    }
+
+    if (register_client_by_socket(client_fd) || safe_write(client_fd, REMBASH))
+    {
+        close(client_fd);
+    }
 }
 
-void handle_io_event(int fd) {
-  if (fd == listen_fd) {
-    accept_client();
-  } else {
-    relay_bytes(fd);
-  }
-}
+
 
 void relay_bytes(int whence)
 {
@@ -424,89 +467,12 @@ void open_terminal_and_exec_bash(char * slavename)
     perror("Failed to exec bash");
 }
 
-void sigalrm_handler(int signal, siginfo_t * sip, void * ignore)
-{
-    printf("caught alarm, with value: %d\n", *(int *) (sip->si_ptr));
-    // set the flag to flown, which will be used in the handshake routine
-    // to determine failure.
-    // Most likely, though, the alarm will cause a blocked read() call to be errored with EINTR
-    *(int *) sip->si_ptr = 1;
-}
-
-
-int handshake_protocol(int fd)
-{
-    // 3 second timer
-    static struct itimerspec timer = { .it_value = { .tv_sec = 3 } };
-    struct sigaction sa = { .sa_flags = SA_SIGINFO, .sa_sigaction = &sigalrm_handler };
-    struct sigevent sev = { .sigev_signo = SIGALRM, .sigev_notify = SIGEV_THREAD_ID };
-    int alarmed_flag = 0;
-    timer_t timerid;
-
-    sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGALRM, &sa, NULL) == -1)
-    {
-        perror("Setting up sigaction");
-    }
-
-    // Setup sigevent to contain our alarmed_flag for data,
-    // and to be thread-specific
-    sev.sigev_value.sival_ptr = &alarmed_flag;
-    sev._sigev_un._tid = syscall(__NR_gettid);
-
-    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1)
-    {
-        perror("timer create");
-    }
-    if (timer_settime(timerid, 0, &timer, NULL) == -1)
-    {
-        perror("settime");
-    }
-    // alarmed_flag is set in the sigalrm handler
-    // it is checked before every stage of the handshake to avoid race conditions
-    if (alarmed_flag || safe_write(fd, REMBASH) ||
-        alarmed_flag || safe_read(fd, SECRET) ||
-        alarmed_flag || safe_write(fd, OK))
-    {
-        return 1;
-    }
-
-    if (signal(SIGALRM, SIG_IGN) == SIG_ERR)
-    {
-        perror("setting sigalrm to sig_ign -- continuing");
-    }
-    if (timer_delete(timerid) == -1)
-    {
-        perror("timer_delete");
-    }
-    // Success
-    return 0;
-}
 
 int safe_write(const int fd, char const * str)
 {
     if (eager_write(fd, str, strlen(str)) == -1)
     {
         perror("Failed to write");
-        return 1;
-    }
-    return 0;
-}
-
-int safe_read(const int fd, char const * expected)
-{
-    char * line;
-
-    if ((line = readline(fd)) == NULL)
-    {
-        perror("Error reading from client");
-        return 1;
-    }
-
-    if (strcmp(expected, line))
-    {
-        fprintf(stderr, "Client gave incorrect protocol\n");
-        safe_write(fd, ERROR);
         return 1;
     }
     return 0;
