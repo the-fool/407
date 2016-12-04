@@ -44,7 +44,6 @@ static int push_task(task_queue* q, int task);
 static int pop_task(task_queue* q);
 static int is_queue_full(task_queue* q);
 static int enlarge_queue(task_queue* q);
-static void print_queue(task_queue* q);
 static void sem_init(sem* sem);
 static void sem_post(sem* sem);
 static void sem_wait(sem* sem);
@@ -110,24 +109,15 @@ static int thread_init(thread** threadpp, int ord) {
 static void* thread_loop(void* _thread) {
   int task;
 
-  thread* td;
-  td = (thread*) _thread;
   for(;;) {
     // Wait for the queue to be non-empty
     sem_wait(tpool.queue->has_task);
     // Lock queue to pop a single task
     pthread_mutex_lock(&tpool.queue->lock);
     task = pop_task(tpool.queue);
-    #if DEBUG
-    printf("Worker %c: got %d\n", td->id, task);
-    print_queue(tpool.queue);
-    #endif
     pthread_mutex_unlock(&tpool.queue->lock);
 
     tpool.subroutine(task);
-    #if DEBUG
-    printf("Worker %c: finished %d\n", td->id, task);
-    #endif
   }
   return NULL;
 }
@@ -188,12 +178,6 @@ static int enlarge_queue(task_queue* q) {
     q->head += q->len;
   }
   q->len = new_len;
-
-  #if DEBUG
-  printf("Enlarged queue :: ");
-  print_queue(q);
-  #endif
-
   return 0; // success
 }
 
@@ -209,24 +193,6 @@ static int pop_task(task_queue* q) {
 static int is_queue_full(task_queue* q) {
   return ((q->tail + 1) % (int)q->len) == q->head;
 }
-
-
-
-  static void print_queue(task_queue* q) {
-    int i = 0;
-    printf(" [ ");
-    while (i < (int)q->len) {
-      if (((q->tail > q->head) && (i < q->tail) && (i >= q->head)) ||
-          ((q->tail < q->head) && ((i < q->tail) || (i >= q->head))))
-        printf(" %d ", q->buffer[i]);
-      else
-        printf(" - ");
-      i++;
-    }
-    printf(" ] \n\n");
-  }
-
-
 
 
 // --  Convenient semaphore wrappers -- //

@@ -1,6 +1,5 @@
-#define _POSIX_C_SOURCE 200809L // for timers (librt)
-#define _XOPEN_SOURCE   600 // for posix pty things
-#define _GNU_SOURCE     // for science
+#define _XOPEN_SOURCE   600
+#define _GNU_SOURCE
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -14,20 +13,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
-#include <sys/timerfd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <termios.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "readline.c"
 #include "tpool.h"
 
 #define BUFF_MAX    4 * 1024
-#define MAX_CLIENTS 64 * 1000
+#define MAX_CLIENTS 64 * 1024
 #define PORT        4070
 #define SECRET      "<cs407rembash>\n"
 #define REMBASH     "<rembash>\n"
@@ -47,24 +44,24 @@ typedef struct client
     client_state_t state;
 } client_t;
 
-int init_socket();
-int set_nonblocking(int fd);
 client_state_t get_client_state(int fd);
-int setup_pty(int * masterfd_p, char ** slavename_p);
-int safe_write(const int fd, char const * msg);
-int eager_write(int fd, const char * const str, size_t len);
-void relay_bytes(int whence);
+client_t * new_client(int socket);
 void destroy_client(int fd);
+int get_paired_client_fd(int fd, client_t * client);
+int register_client_by_socket(int socket);
+int validate_secret(int sock_fd);
+void accept_client();
+int set_client_pty(client_t * client, int pty);
+void open_terminal_and_exec_bash(char * ptyslave);
+int init_socket();
+int setup_pty(int * masterfd_p, char ** slavename_p);
+void relay_bytes(int whence);
 void epoll_loop(void);
 int establish_client(int);
-int register_client_by_socket(int socket);
-void open_terminal_and_exec_bash(char * ptyslave);
 void handle_io_event(int fd);
-void accept_client();
-int get_paired_client_fd(int fd, client_t * client);
-int validate_secret(int sock_fd);
-int set_client_pty(client_t * client, int pty);
-client_t * new_client(int socket);
+int set_nonblocking(int fd);
+int eager_write(int fd, const char * const str);
+
 // epoll instance
 int efd;
 
@@ -182,51 +179,10 @@ int validate_secret(int sock_fd)
     if (strcmp(SECRET, line))
     {
         fprintf(stderr, "Client gave incorrect protocol\n");
-        safe_write(sock_fd, ERROR);
+        eager_write(sock_fd, ERROR);
         return 1;
     }
     return 0;
-}
-
-client_state_t get_client_state(int fd)
-{
-    return fd_client_map[fd]->state;
-}
-
-int get_paired_client_fd(int fd, client_t * client)
-{
-    return (fd == client->pty_fd ? client->socket_fd : client->pty_fd);
-}
-
-void unbind_fd(int fd)
-{
-    epoll_ctl(efd, EPOLL_CTL_DEL, fd, NULL);
-    if (close(fd) != -1)
-    {
-        fd_client_map[fd] = NULL;
-    }
-}
-
-void destroy_client(int fd)
-{
-    client_t * client = fd_client_map[fd];
-
-    if (client == NULL)
-    {
-        close(fd);
-        return;
-    }
-    int socket = client->socket_fd;
-    int pty = client->pty_fd;
-
-    unbind_fd(socket);
-
-    if (client->state == complete)
-    {
-        unbind_fd(pty);
-    }
-
-    free(client);
 }
 
 
@@ -261,7 +217,7 @@ int establish_client(int socket_fd)
             exit(EXIT_FAILURE);
     }
 
-    if (safe_write(socket_fd, OK))
+    if (eager_write(socket_fd, OK))
     {
         return -1;
     }
@@ -324,7 +280,6 @@ int init_socket()
     }
 
     set_nonblocking(listen_fd);
-    // Add the socket fd to the epoll list
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = listen_fd;
@@ -397,7 +352,7 @@ void accept_client()
         return;
     }
 
-    if (register_client_by_socket(client_fd) || safe_write(client_fd, REMBASH))
+    if (register_client_by_socket(client_fd) || eager_write(client_fd, REMBASH))
     {
         close(client_fd);
     }
@@ -464,23 +419,15 @@ void open_terminal_and_exec_bash(char * slavename)
     }
 
     execlp("bash", "bash", NULL);
-    perror("Failed to exec bash");
 }
 
 
-int safe_write(const int fd, char const * str)
-{
-    if (eager_write(fd, str, strlen(str)) == -1)
-    {
-        perror("Failed to write");
-        return 1;
-    }
-    return 0;
-}
 
-int eager_write(int fd, const char * const msg, size_t len)
+
+int eager_write(const int fd, const char * const msg)
 {
     size_t accum = 0;
+    size_t len = strlen(msg);
     int nwrote = 0;
 
     do
@@ -490,11 +437,50 @@ int eager_write(int fd, const char * const msg, size_t len)
             break;
         }
         accum += nwrote;
+    } while (accum < len);
+
+    return !(nwrote >= 0);
+}
+
+client_state_t get_client_state(int fd)
+{
+    return fd_client_map[fd]->state;
+}
+
+int get_paired_client_fd(int fd, client_t * client)
+{
+    return (fd == client->pty_fd ? client->socket_fd : client->pty_fd);
+}
+
+void unbind_fd(int fd)
+{
+    epoll_ctl(efd, EPOLL_CTL_DEL, fd, NULL);
+    if (close(fd) != -1)
+    {
+        fd_client_map[fd] = NULL;
     }
-    while (accum < len);
-    accum = 0;
-    nwrote = 0;
-    return nwrote;
+}
+
+void destroy_client(int fd)
+{
+    client_t * client = fd_client_map[fd];
+
+    if (client == NULL)
+    {
+        close(fd);
+        return;
+    }
+    int socket = client->socket_fd;
+    int pty = client->pty_fd;
+
+    unbind_fd(socket);
+
+    if (client->state == complete)
+    {
+        unbind_fd(pty);
+    }
+
+    free(client);
 }
 
 // General purpose non-blockifier for file-descriptors
