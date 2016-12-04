@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE   600
+#define _XOPEN_SOURCE 600
 #define _GNU_SOURCE
 
 #include <arpa/inet.h>
@@ -185,7 +185,6 @@ int validate_secret(int sock_fd)
     return 0;
 }
 
-
 int establish_client(int socket_fd)
 {
     char * ptyslave;
@@ -358,8 +357,6 @@ void accept_client()
     }
 }
 
-
-
 void relay_bytes(int whence)
 {
     char buff[BUFF_MAX];
@@ -421,9 +418,6 @@ void open_terminal_and_exec_bash(char * slavename)
     execlp("bash", "bash", NULL);
 }
 
-
-
-
 int eager_write(const int fd, const char * const msg)
 {
     size_t accum = 0;
@@ -437,7 +431,8 @@ int eager_write(const int fd, const char * const msg)
             break;
         }
         accum += nwrote;
-    } while (accum < len);
+    }
+    while (accum < len);
 
     return !(nwrote >= 0);
 }
