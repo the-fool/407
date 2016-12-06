@@ -68,13 +68,10 @@ int efd;
 // main listening socket
 int listen_fd;
 
-// Kind of like a hash, or list of tuples
-// At index i, the value is the associated client for FD i (pty || socket)
+
 client_t * fd_client_map[MAX_CLIENTS * 2 + 5];
 
 
-// Initialize resources and go into an accept() loop
-// Each client is given a new thread -- which is inefficient
 int main()
 {
     tpool_init(handle_io_event);
@@ -108,8 +105,6 @@ int main()
 }
 
 
-// This is the epoll loop
-// it waits, and then decides whether to relay data or close down a pair of resources
 void epoll_loop()
 {
     struct epoll_event evlist[MAX_CLIENTS * 2 + 1];
